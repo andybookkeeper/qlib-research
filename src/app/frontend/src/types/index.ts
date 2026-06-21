@@ -44,7 +44,7 @@ export interface Order {
   side: 'BUY' | 'SELL'
   quantity: number
   price: number
-  status: 'PENDING' | 'FILLED' | 'CANCELLED'
+  status: 'PENDING' | 'FILLED' | 'CANCELLED' | 'REJECTED'
   timestamp: string
 }
 

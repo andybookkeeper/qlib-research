@@ -1,0 +1,29 @@
+phase: 3
+stage: kickoff
+goal: "Enable live-broker readiness with strict safety and feature-flag gating."
+
+in_scope:
+  - Broker abstraction v2 interface
+  - First broker adapter path behind feature flag
+  - Broker reconciliation/sync loop behind feature flag
+  - Strengthened pre-trade risk guardrails
+  - Strategy automation framework behind feature flag
+
+non_goals_initial:
+  - Enabling live order execution by default
+  - Multi-broker production rollout in first increment
+  - Removing paper-trading fallback path
+  - Fully autonomous trading without manual confirmation
+
+default_flags:
+  PHASE3_ENABLE_LIVE_BROKER_ADAPTER: false
+  PHASE3_ENABLE_BROKER_RECONCILIATION: false
+  PHASE3_ENABLE_STRATEGY_AUTOMATION: false
+  PHASE3_ENFORCE_MANUAL_TRADE_CONFIRMATION: true
+
+rollout_principles:
+  - paper-safe-by-default
+  - explicit-opt-in-per-feature
+  - reversible-feature-toggles
+  - contract-stable-api-first
+

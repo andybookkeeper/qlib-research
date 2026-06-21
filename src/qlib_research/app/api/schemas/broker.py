@@ -16,6 +16,24 @@ class OrderRequest(BaseModel):
     limit_price: Optional[float] = None
 
 
+class StrategyProposalRequest(BaseModel):
+    """Request payload for a strategy-generated proposal."""
+
+    ticker: str
+    side: str = Field(..., description="buy or sell")
+    quantity: float = Field(..., gt=0)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    rationale: str
+    suggested_price: Optional[float] = None
+
+
+class StrategyProposalExecuteRequest(BaseModel):
+    """Request payload to execute a strategy proposal."""
+
+    confirmation_text: Optional[str] = None
+    current_price: Optional[float] = None
+
+
 class OrderResponse(BaseModel):
     """Order response."""
     order_id: str
@@ -26,6 +44,7 @@ class OrderResponse(BaseModel):
     status: str
     filled_quantity: float
     filled_price: Optional[float]
+    rejected_reason: Optional[str] = None
     created_at: str
 
 

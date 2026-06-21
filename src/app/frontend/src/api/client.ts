@@ -1,4 +1,5 @@
-const API_BASE_URL = 'http://localhost:8000/api'
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api'
+export const API_BASE_URL = String(rawApiBaseUrl).replace(/\/+$/, '')
 const AUTH_TOKEN_KEY = 'qlib_auth_token'
 
 function getAuthToken(): string | null {
@@ -28,7 +29,15 @@ async function request<T = any>(path: string, init: RequestInit = {}): Promise<T
 export function createRealtimeWebSocket(): WebSocket {
   const token = getAuthToken()
   const query = token ? `?token=${encodeURIComponent(token)}` : ''
-  return new WebSocket(`ws://localhost:8000/api/realtime/ws${query}`)
+  const configuredWsBase = import.meta.env.VITE_WS_BASE_URL
+  let wsBase = ''
+  if (configuredWsBase) {
+    wsBase = String(configuredWsBase).replace(/\/+$/, '')
+  } else {
+    const apiUrl = new URL(API_BASE_URL)
+    wsBase = apiUrl.origin.replace(/^http/, 'ws')
+  }
+  return new WebSocket(`${wsBase}/api/realtime/ws${query}`)
 }
 
 export const apiClient = {

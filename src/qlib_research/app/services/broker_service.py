@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 import uuid
+import os
 
 import pandas as pd
 import numpy as np
@@ -17,6 +18,7 @@ from src.qlib_research.app.models.database import (
     Position as DBPosition,
     Order as DBOrder,
     Trade as DBTrade,
+    AuditLog as DBAuditLog,
 )
 
 
@@ -519,6 +521,9 @@ class DatabaseBrokerService:
     def __init__(self, db: Session, commission_rate: float = 0.001):
         self.db = db
         self.commission_rate = commission_rate
+        self.max_trade_notional = float(os.getenv("PHASE3_MAX_TRADE_NOTIONAL", "25000"))
+        self.max_position_notional = float(os.getenv("PHASE3_MAX_POSITION_NOTIONAL", "50000"))
+        self.max_daily_loss = float(os.getenv("PHASE3_MAX_DAILY_LOSS", "5000"))
 
     @staticmethod
     def _as_float(value, default: float = 0.0) -> float:
@@ -586,6 +591,101 @@ class DatabaseBrokerService:
         market_value = self._portfolio_market_value(portfolio.id)
         portfolio.total_value = self._as_float(portfolio.current_cash) + market_value
         self.db.commit()
+
+    def _log_audit_event(
+        self,
+        *,
+        user_id: int,
+        portfolio_id: int,
+        action: str,
+        status: str,
+        details: Dict[str, object],
+        entity_id: Optional[int] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        self.db.add(
+            DBAuditLog(
+                user_id=user_id,
+                portfolio_id=portfolio_id,
+                action=action,
+                entity_type="order",
+                entity_id=entity_id,
+                details=details,
+                status=status,
+                error_message=error_message,
+            )
+        )
+        self.db.commit()
+
+    def _today_realized_pnl(self, portfolio_id: int) -> float:
+        today = datetime.utcnow().date()
+        realized = (
+            self.db.query(DBTrade)
+            .filter(DBTrade.portfolio_id == portfolio_id)
+            .all()
+        )
+        total = 0.0
+        for trade in realized:
+            executed_at = getattr(trade, "executed_at", None)
+            if executed_at is None or executed_at.date() != today:
+                continue
+            total += self._as_float(trade.gross_pnl, 0.0)
+        return total
+
+    def _resolve_reference_price(
+        self,
+        *,
+        order_type: str,
+        price: Optional[float],
+        stop_price: Optional[float],
+        current_price: Optional[float],
+    ) -> float:
+        if order_type == "LIMIT" and price is not None:
+            return self._as_float(price, 0.0)
+        if order_type == "STOP" and stop_price is not None:
+            return self._as_float(stop_price, 0.0)
+        if current_price is not None:
+            return self._as_float(current_price, 0.0)
+        return 100.0
+
+    def _validate_pre_trade_risk(
+        self,
+        *,
+        portfolio: DBPortfolio,
+        symbol: str,
+        side: str,
+        quantity: int,
+        reference_price: float,
+    ) -> Optional[str]:
+        order_notional = abs(quantity * reference_price)
+        if order_notional > self.max_trade_notional:
+            return (
+                f"Order notional ${order_notional:,.2f} exceeds limit "
+                f"${self.max_trade_notional:,.2f}."
+            )
+
+        position = (
+            self.db.query(DBPosition)
+            .filter(DBPosition.portfolio_id == portfolio.id, DBPosition.symbol == symbol)
+            .first()
+        )
+        existing_qty = int(position.quantity) if position is not None else 0
+        signed_qty = quantity if side == "BUY" else -quantity
+        projected_qty = existing_qty + signed_qty
+        projected_notional = abs(projected_qty * reference_price)
+        if projected_notional > self.max_position_notional:
+            return (
+                f"Projected position notional ${projected_notional:,.2f} exceeds limit "
+                f"${self.max_position_notional:,.2f}."
+            )
+
+        daily_realized = self._today_realized_pnl(portfolio.id)
+        if daily_realized <= -abs(self.max_daily_loss):
+            return (
+                f"Daily realized PnL ${daily_realized:,.2f} breaches max daily loss "
+                f"-${abs(self.max_daily_loss):,.2f}."
+            )
+        return None
 
     def _apply_fill_to_position(self, portfolio: DBPortfolio, order: DBOrder, fill_price: float, commission: float) -> None:
         symbol = order.symbol.upper()
@@ -677,25 +777,60 @@ class DatabaseBrokerService:
             normalized_type = "MARKET"
         if normalized_side not in {"BUY", "SELL"}:
             normalized_side = "BUY"
+        order_quantity = int(quantity)
+        reference_price = self._resolve_reference_price(
+            order_type=normalized_type,
+            price=price,
+            stop_price=stop_price,
+            current_price=current_price,
+        )
+        rejected_reason = self._validate_pre_trade_risk(
+            portfolio=portfolio,
+            symbol=ticker.upper(),
+            side=normalized_side,
+            quantity=order_quantity,
+            reference_price=reference_price,
+        )
+        order_status = "REJECTED" if rejected_reason else "PENDING"
 
         order = DBOrder(
             portfolio_id=portfolio.id,
             symbol=ticker.upper(),
             side=normalized_side,
-            quantity=int(quantity),
+            quantity=order_quantity,
             order_type=normalized_type,
             order_price=price,
             stop_price=stop_price,
-            status="PENDING",
+            status=order_status,
+            rejected_reason=rejected_reason,
             created_at=datetime.utcnow(),
         )
         self.db.add(order)
         self.db.commit()
         self.db.refresh(order)
 
+        self._log_audit_event(
+            user_id=portfolio.user_id,
+            portfolio_id=portfolio.id,
+            action="order_create",
+            status="FAILED" if rejected_reason else "SUCCESS",
+            entity_id=order.id,
+            details={
+                "symbol": order.symbol,
+                "side": order.side,
+                "order_type": order.order_type,
+                "quantity": int(order.quantity),
+                "status": order.status,
+            },
+            error_message=rejected_reason,
+        )
+
+        if rejected_reason:
+            return order
+
         if normalized_type == "MARKET":
             fill_at = current_price if current_price is not None else 100.0
-            self.fill_order(order.id, fill_at)
+            self.fill_order(order.id, fill_at, user_id=user_id)
             self.db.refresh(order)
 
         return order
@@ -760,6 +895,20 @@ class DatabaseBrokerService:
             raise ValueError("Portfolio not found for order")
 
         self._apply_fill_to_position(portfolio, order, fill_price, commission)
+        self._log_audit_event(
+            user_id=portfolio.user_id,
+            portfolio_id=portfolio.id,
+            action="order_fill",
+            status="SUCCESS",
+            entity_id=order.id,
+            details={
+                "symbol": order.symbol,
+                "side": order.side,
+                "order_type": order.order_type,
+                "fill_price": fill_price,
+                "quantity": int(order.quantity),
+            },
+        )
         self.db.refresh(order)
         return order
 

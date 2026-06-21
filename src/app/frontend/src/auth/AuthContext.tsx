@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { API_BASE_URL } from '../api/client'
 
 type AuthUser = {
   id: number
@@ -21,7 +22,7 @@ const TOKEN_KEY = 'qlib_auth_token'
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 async function fetchMe(token: string): Promise<AuthUser> {
-  const response = await fetch('http://localhost:8000/api/auth/me', {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!response.ok) {
@@ -86,4 +87,3 @@ export function useAuth() {
   }
   return context
 }
-

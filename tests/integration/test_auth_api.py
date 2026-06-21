@@ -141,3 +141,126 @@ class TestAuthAPI:
         assert user_b_portfolio.status_code == 200
         assert user_a_portfolio.json()["open_positions"] == 1
         assert user_b_portfolio.json()["open_positions"] == 0
+
+    def test_live_adapter_endpoints_require_auth_and_return_snapshot(self, client: TestClient):
+        unauthorized = client.get("/api/broker/live/status")
+        assert unauthorized.status_code == 401
+
+        token = _signup_and_login(
+            client=client,
+            username="live_check_user",
+            email="live_check_user@example.com",
+            password="password123",
+        )
+
+        status_response = client.get("/api/broker/live/status", headers=_auth_headers(token))
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        assert "adapter_mode" in status_payload
+        assert "read_only" in status_payload
+        assert "execution_enabled" in status_payload
+
+        account_response = client.get("/api/broker/live/account", headers=_auth_headers(token))
+        assert account_response.status_code == 200
+        account_payload = account_response.json()
+        assert "portfolio_value" in account_payload
+        assert "cash" in account_payload
+        assert "synced_at" in account_payload
+
+    def test_live_reconciliation_respects_feature_flag(self, client: TestClient, monkeypatch):
+        token = _signup_and_login(
+            client=client,
+            username="recon_user",
+            email="recon_user@example.com",
+            password="password123",
+        )
+        headers = _auth_headers(token)
+
+        monkeypatch.setenv("PHASE3_ENABLE_BROKER_RECONCILIATION", "false")
+        disabled_response = client.get("/api/broker/live/reconciliation", headers=headers)
+        assert disabled_response.status_code == 503
+
+        monkeypatch.setenv("PHASE3_ENABLE_BROKER_RECONCILIATION", "true")
+        enabled_response = client.get("/api/broker/live/reconciliation", headers=headers)
+        assert enabled_response.status_code == 200
+        payload = enabled_response.json()
+        assert "status" in payload
+        assert "live" in payload
+        assert "alerts" in payload
+
+    def test_pretrade_risk_guardrail_rejects_oversized_order(self, client: TestClient, monkeypatch):
+        token = _signup_and_login(
+            client=client,
+            username="risk_user",
+            email="risk_user@example.com",
+            password="password123",
+        )
+        monkeypatch.setenv("PHASE3_MAX_TRADE_NOTIONAL", "1000")
+
+        response = client.post(
+            "/api/broker/orders",
+            headers=_auth_headers(token),
+            json={
+                "ticker": "AAPL",
+                "side": "buy",
+                "quantity": 20,
+                "order_type": "market",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "rejected"
+        assert payload["rejected_reason"] is not None
+
+    def test_strategy_automation_requires_flag_and_confirmation(self, client: TestClient, monkeypatch):
+        token = _signup_and_login(
+            client=client,
+            username="auto_user",
+            email="auto_user@example.com",
+            password="password123",
+        )
+        headers = _auth_headers(token)
+
+        monkeypatch.setenv("PHASE3_ENABLE_STRATEGY_AUTOMATION", "false")
+        disabled = client.post(
+            "/api/broker/automation/proposals",
+            headers=headers,
+            json={
+                "ticker": "AAPL",
+                "side": "buy",
+                "quantity": 5,
+                "confidence": 0.75,
+                "rationale": "Momentum signal",
+            },
+        )
+        assert disabled.status_code == 503
+
+        monkeypatch.setenv("PHASE3_ENABLE_STRATEGY_AUTOMATION", "true")
+        proposal_response = client.post(
+            "/api/broker/automation/proposals",
+            headers=headers,
+            json={
+                "ticker": "AAPL",
+                "side": "buy",
+                "quantity": 5,
+                "confidence": 0.75,
+                "rationale": "Momentum signal",
+            },
+        )
+        assert proposal_response.status_code == 200
+        proposal_id = proposal_response.json()["proposal_id"]
+
+        rejected_execute = client.post(
+            f"/api/broker/automation/proposals/{proposal_id}/execute",
+            headers=headers,
+            json={"current_price": 100.0},
+        )
+        assert rejected_execute.status_code == 400
+
+        confirmed_execute = client.post(
+            f"/api/broker/automation/proposals/{proposal_id}/execute",
+            headers=headers,
+            json={"confirmation_text": "CONFIRM", "current_price": 100.0},
+        )
+        assert confirmed_execute.status_code == 200
+        assert confirmed_execute.json()["order"]["status"] in {"filled", "pending", "rejected"}

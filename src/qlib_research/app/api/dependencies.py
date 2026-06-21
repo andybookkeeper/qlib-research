@@ -5,12 +5,16 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
+from src.qlib_research.app.config import get_phase3_feature_flags
 from src.qlib_research.app.db import SessionLocal, get_db
 from src.qlib_research.app.models.database import User
+from src.qlib_research.app.services.broker_adapter import BrokerAdapter, create_broker_adapter
 from src.qlib_research.app.services.qlib_service import QlibService
 from src.qlib_research.app.services.market_data_service import MarketDataService
 from src.qlib_research.app.services.data_pipeline import DataPipeline, CacheManager
 from src.qlib_research.app.services.auth_service import decode_access_token
+from src.qlib_research.app.services.broker_reconciliation_service import BrokerReconciliationService
+from src.qlib_research.app.services.strategy_automation_service import StrategyAutomationService
 from src.qlib_research.app.services.training_runtime_service import TrainingRuntimeService
 
 
@@ -18,6 +22,8 @@ from src.qlib_research.app.services.training_runtime_service import TrainingRunt
 _qlib_service: QlibService = None
 _market_data_service: MarketDataService = None
 _training_runtime_service: TrainingRuntimeService = None
+_broker_reconciliation_service: BrokerReconciliationService = None
+_strategy_automation_service: StrategyAutomationService = None
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
@@ -63,6 +69,31 @@ def get_training_runtime_service() -> TrainingRuntimeService:
     if _training_runtime_service is None:
         _training_runtime_service = TrainingRuntimeService()
     return _training_runtime_service
+
+
+def get_broker_adapter(db: Session = Depends(get_db)) -> BrokerAdapter:
+    """Resolve broker adapter (paper by default, live path feature-flagged)."""
+    flags = get_phase3_feature_flags()
+    return create_broker_adapter(
+        db=db,
+        enable_live_broker_adapter=flags["enable_live_broker_adapter"],
+    )
+
+
+def get_broker_reconciliation_service() -> BrokerReconciliationService:
+    """Get or create broker reconciliation service."""
+    global _broker_reconciliation_service
+    if _broker_reconciliation_service is None:
+        _broker_reconciliation_service = BrokerReconciliationService()
+    return _broker_reconciliation_service
+
+
+def get_strategy_automation_service() -> StrategyAutomationService:
+    """Get or create strategy automation service."""
+    global _strategy_automation_service
+    if _strategy_automation_service is None:
+        _strategy_automation_service = StrategyAutomationService()
+    return _strategy_automation_service
 
 
 def get_current_user(

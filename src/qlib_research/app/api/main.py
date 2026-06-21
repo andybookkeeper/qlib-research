@@ -9,10 +9,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.qlib_research.app.api.routes import market, features, training, broker, risk, portfolio, research, realtime, auth
-from src.qlib_research.app.config import get_cors_origins, validate_runtime_settings
+from src.qlib_research.app.config import (
+    get_cors_origins,
+    get_phase3_feature_flags,
+    get_phase3_scope_stage,
+    validate_runtime_settings,
+)
 from src.qlib_research.app.db import init_db, verify_connection
+from src.qlib_research.app.services.reconciliation_scheduler import ReconciliationScheduler
 
 logger = logging.getLogger("qlib_trading.api")
+reconciliation_scheduler = ReconciliationScheduler()
 
 
 @asynccontextmanager
@@ -20,27 +27,30 @@ async def lifespan(app: FastAPI):
     """Startup/shutdown events."""
     
     # Startup
-    logger.info("🚀 Starting Qlib Trading API")
+    logger.info("Starting Qlib Trading API")
     validate_runtime_settings(logger)
     
     # Initialize database
     try:
         logger.info("[DB] Initializing database...")
         init_db()
-        logger.info("[DB] ✓ Database tables created")
+        logger.info("[DB] Database tables created")
         
         if verify_connection():
-            logger.info("[DB] ✓ Database connection verified")
+            logger.info("[DB] Database connection verified")
         else:
-            logger.warning("[DB] ⚠ Database connection check failed")
+            logger.warning("[DB] Database connection check failed")
     except Exception as e:
-        logger.error(f"[DB] ✗ Database initialization failed: {e}")
+        logger.error(f"[DB] Database initialization failed: {e}")
         raise
+
+    await reconciliation_scheduler.start()
     
     yield
     
     # Shutdown
-    logger.info("👋 Shutting down Qlib Trading API")
+    await reconciliation_scheduler.stop()
+    logger.info("Shutting down Qlib Trading API")
 
 
 # Create FastAPI app
@@ -92,7 +102,12 @@ async def api_status():
             "qlib": "initializing",
             "broker": "ready",
             "database": "ready"
-        }
+        },
+        "phase3": {
+            "scope_stage": get_phase3_scope_stage(),
+            "flags": get_phase3_feature_flags(),
+            "reconciliation_scheduler": reconciliation_scheduler.status(),
+        },
     }
 
 

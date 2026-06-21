@@ -100,7 +100,7 @@ def init_db():
     """Initialize database tables (create if not exist)"""
     from src.qlib_research.app.models.database import Base
     Base.metadata.create_all(bind=engine)
-    print("[DATABASE] ✓ Tables initialized")
+    print("[DATABASE] Tables initialized")
 
 
 def drop_all_tables():
@@ -115,8 +115,8 @@ def verify_connection():
     try:
         with engine.connect() as conn:
             conn.exec_driver_sql("SELECT 1")
-            print("[DATABASE] ✓ Connection verified")
+            print("[DATABASE] Connection verified")
             return True
     except Exception as e:
-        print(f"[DATABASE] ✗ Connection failed: {e}")
+        print(f"[DATABASE] Connection failed: {e}")
         return False
