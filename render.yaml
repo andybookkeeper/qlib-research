@@ -23,7 +23,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://your-frontend-domain.vercel.app
+        value: https://qlib-trading-ui.vercel.app,http://localhost:5173,http://localhost:3000
       - key: ENABLE_LIVE_TRADING
         value: "false"
       - key: PHASE3_ENABLE_LIVE_BROKER_ADAPTER

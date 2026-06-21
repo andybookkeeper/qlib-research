@@ -4,7 +4,18 @@ __pycache__/
 .ipynb_checkpoints/
 *.pyc
 
+# Frontend
+node_modules/
+dist/
+.env.local
+.env.*.local
+
+# Backend
 data/qlib/**
 !data/qlib/.gitignore
 data/qlib_trading.db
 mlruns/
+
+# Database locks
+*.db-shm
+*.db-wal
