@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field
 
 class ModelConfigSchema(BaseModel):
     """Model configuration."""
+    model_family: str = Field("lightgbm", description="lightgbm, random_forest, or extra_trees")
     task: str = Field("classification", description="classification, multiclass, or regression")
-    target_column: str = "label_1d"
+    target_column: Optional[str] = None
+    forecast_horizon: int = Field(1, ge=1, le=252)
+    test_size: float = Field(0.2, gt=0.05, lt=0.5)
     n_splits: int = 5
     n_estimators: int = 100
     learning_rate: float = 0.05
@@ -19,6 +22,7 @@ class ModelConfigSchema(BaseModel):
 
 class TrainingRequest(BaseModel):
     """Training request."""
+    model_name: Optional[str] = None
     ticker: str
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")

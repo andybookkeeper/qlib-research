@@ -328,20 +328,22 @@ class FeaturePipeline:
             )
             targets.update(forward_ret)
             
-            # Classification labels for 1-period forward return
-            if 'ret_1' in forward_ret:
+            # Classification and multi-class labels for each configured horizon
+            for period in self.config.forward_returns_periods:
+                return_key = f'ret_{period}'
+                if return_key not in forward_ret:
+                    continue
+
                 labels = TargetEngineering.classification_labels(
-                    forward_ret['ret_1'],
-                    self.config.classification_threshold
+                    forward_ret[return_key],
+                    self.config.classification_threshold,
+                    periods=period
                 )
-                targets['label_1d'] = labels
+                targets[f'label_{period}d'] = labels
+
+                bins = TargetEngineering.return_bins(forward_ret[return_key], bins=5)
+                targets[f'label_{period}d_bin'] = bins
                 self.stats['targets_created'] += 2
-            
-            # Multi-class labels (5 bins)
-            if 'ret_5' in forward_ret:
-                bins = TargetEngineering.return_bins(forward_ret['ret_5'], bins=5)
-                targets['label_5d_bin'] = bins
-                self.stats['targets_created'] += 1
             
         except Exception as e:
             self.stats['errors'].append(f"Target engineering error: {str(e)}")

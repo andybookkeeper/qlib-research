@@ -43,6 +43,7 @@ class TestModelConfig:
         """Test default configuration."""
         config = ModelConfig()
         
+        assert config.model_family == "lightgbm"
         assert config.task == "classification"
         assert config.target_column == "label_1d"
         assert config.n_splits == 5
@@ -50,11 +51,13 @@ class TestModelConfig:
     
     def test_config_serialization(self):
         """Test configuration serialization."""
-        config = ModelConfig(task="regression", n_estimators=200)
+        config = ModelConfig(model_family="random_forest", task="regression", forecast_horizon=5, n_estimators=200)
         
         config_dict = config.to_dict()
         
+        assert config_dict['model_family'] == "random_forest"
         assert config_dict['task'] == "regression"
+        assert config_dict['target_column'] == "ret_5"
         assert config_dict['params']['n_estimators'] == 200
 
 
@@ -90,6 +93,19 @@ class TestTimeSeriesDataSplit:
 
 class TestModelTrainer:
     """Test model trainer."""
+
+    @pytest.mark.parametrize("model_family", ["lightgbm", "random_forest", "extra_trees"])
+    def test_train_supported_model_families(self, sample_ohlcv, model_family):
+        """Test supported model families train successfully."""
+        config = ModelConfig(model_family=model_family, task="classification", n_estimators=10)
+        trainer = ModelTrainer(config)
+
+        X_train, y_train, X_test, y_test = trainer.prepare_data(sample_ohlcv, test_size=0.2)
+
+        metrics = trainer.train(X_train, y_train, X_test, y_test)
+
+        assert metrics['n_estimators'] > 0
+        assert trainer.model is not None
     
     def test_prepare_data(self, sample_ohlcv):
         """Test data preparation."""
@@ -163,26 +179,24 @@ class TestModelTrainer:
     
     def test_save_load(self, sample_ohlcv, tmp_path):
         """Test model persistence."""
-        config = ModelConfig(task="classification", n_estimators=5)
-        trainer = ModelTrainer(config)
-        
-        X_train, y_train, X_test, y_test = trainer.prepare_data(sample_ohlcv, test_size=0.2)
-        
-        trainer.train(X_train, y_train)
-        
-        # Save
-        model_path = str(tmp_path / "model.txt")
-        trainer.save(model_path)
-        
-        # Load
-        trainer2 = ModelTrainer(config)
-        trainer2.load(model_path)
-        
-        # Predictions should be the same
-        pred1 = trainer.predict(X_test)
-        pred2 = trainer2.predict(X_test)
-        
-        assert np.allclose(pred1, pred2)
+        for model_family in ["lightgbm", "random_forest"]:
+            config = ModelConfig(model_family=model_family, task="classification", n_estimators=5)
+            trainer = ModelTrainer(config)
+
+            X_train, y_train, X_test, y_test = trainer.prepare_data(sample_ohlcv, test_size=0.2)
+
+            trainer.train(X_train, y_train)
+
+            model_path = tmp_path / f"model-{model_family}{trainer.model_artifact_suffix()}"
+            trainer.save(str(model_path))
+
+            trainer2 = ModelTrainer(config)
+            trainer2.load(str(model_path))
+
+            pred1 = trainer.predict(X_test)
+            pred2 = trainer2.predict(X_test)
+
+            assert np.allclose(pred1, pred2)
 
 
 class TestBacktestEngine:

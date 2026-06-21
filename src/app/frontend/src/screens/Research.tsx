@@ -29,17 +29,28 @@ import {
   TabPanel,
   useToast,
   Progress,
+  Select,
 } from '@chakra-ui/react'
 import { Model } from '../types'
 import { apiClient } from '../api/client'
 
 interface TrainingConfig {
   model_name: string
-  lookback: number
+  ticker: string
+  start_date: string
+  end_date: string
+  model_family: string
+  task: string
   forecast_horizon: number
-  features: string[]
   test_size: number
+  n_estimators: number
 }
+
+const today = new Date()
+const defaultEndDate = today.toISOString().slice(0, 10)
+const defaultStartDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate())
+  .toISOString()
+  .slice(0, 10)
 
 const Research: React.FC = () => {
   const [models, setModels] = useState<Model[]>([])
@@ -49,11 +60,15 @@ const Research: React.FC = () => {
   const [training, setTraining] = useState(false)
   const [trainProgress, setTrainProgress] = useState(0)
   const [trainConfig, setTrainConfig] = useState<TrainingConfig>({
-    model_name: 'lgb_v1',
-    lookback: 60,
+    model_name: 'lgbm-aapl-1d',
+    ticker: 'AAPL',
+    start_date: defaultStartDate,
+    end_date: defaultEndDate,
+    model_family: 'lightgbm',
+    task: 'classification',
     forecast_horizon: 5,
-    features: ['RSI', 'MACD', 'Bollinger Bands'],
     test_size: 0.2,
+    n_estimators: 150,
   })
   const toast = useToast()
 
@@ -89,14 +104,26 @@ const Research: React.FC = () => {
         setTrainProgress((prev) => Math.min(prev + Math.random() * 30, 90))
       }, 500)
 
-      const result = await apiClient.training.trainModel(trainConfig)
+      const result = await apiClient.training.trainModel({
+        model_name: trainConfig.model_name,
+        ticker: trainConfig.ticker,
+        start_date: trainConfig.start_date,
+        end_date: trainConfig.end_date,
+        config: {
+          model_family: trainConfig.model_family,
+          task: trainConfig.task,
+          forecast_horizon: trainConfig.forecast_horizon,
+          test_size: trainConfig.test_size,
+          n_estimators: trainConfig.n_estimators,
+        },
+      })
 
       clearInterval(progressInterval)
       setTrainProgress(100)
 
       toast({
         title: 'Model Training Complete',
-        description: `${result.model_id} - Test Loss: ${result.test_loss.toFixed(4)}`,
+        description: `${result.model_name || result.model_id} - Test Loss: ${result.test_loss.toFixed(4)}`,
         status: 'success',
       })
 
@@ -212,14 +239,75 @@ const Research: React.FC = () => {
                   </FormControl>
 
                   <FormControl>
-                    <FormLabel>Lookback Period (days)</FormLabel>
+                    <FormLabel>Ticker</FormLabel>
                     <Input
-                      type="number"
-                      value={trainConfig.lookback}
+                      value={trainConfig.ticker}
                       onChange={(e) =>
                         setTrainConfig({
                           ...trainConfig,
-                          lookback: parseInt(e.target.value) || 60,
+                          ticker: e.target.value.toUpperCase(),
+                        })
+                      }
+                    />
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Model Family</FormLabel>
+                    <Select
+                      value={trainConfig.model_family}
+                      onChange={(e) =>
+                        setTrainConfig({
+                          ...trainConfig,
+                          model_family: e.target.value,
+                        })
+                      }
+                    >
+                      <option value="lightgbm">LightGBM (recommended baseline)</option>
+                      <option value="random_forest">Random Forest</option>
+                      <option value="extra_trees">Extra Trees</option>
+                    </Select>
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Task</FormLabel>
+                    <Select
+                      value={trainConfig.task}
+                      onChange={(e) =>
+                        setTrainConfig({
+                          ...trainConfig,
+                          task: e.target.value,
+                        })
+                      }
+                    >
+                      <option value="classification">Classification</option>
+                      <option value="multiclass">Multiclass</option>
+                      <option value="regression">Regression</option>
+                    </Select>
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Start Date</FormLabel>
+                    <Input
+                      type="date"
+                      value={trainConfig.start_date}
+                      onChange={(e) =>
+                        setTrainConfig({
+                          ...trainConfig,
+                          start_date: e.target.value,
+                        })
+                      }
+                    />
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>End Date</FormLabel>
+                    <Input
+                      type="date"
+                      value={trainConfig.end_date}
+                      onChange={(e) =>
+                        setTrainConfig({
+                          ...trainConfig,
+                          end_date: e.target.value,
                         })
                       }
                     />
@@ -234,6 +322,22 @@ const Research: React.FC = () => {
                         setTrainConfig({
                           ...trainConfig,
                           forecast_horizon: parseInt(e.target.value) || 5,
+                        })
+                      }
+                    />
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Estimators</FormLabel>
+                    <Input
+                      type="number"
+                      min="10"
+                      step="10"
+                      value={trainConfig.n_estimators}
+                      onChange={(e) =>
+                        setTrainConfig({
+                          ...trainConfig,
+                          n_estimators: parseInt(e.target.value) || 150,
                         })
                       }
                     />

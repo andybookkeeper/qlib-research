@@ -5,12 +5,18 @@ import os
 import pickle
 import json
 from datetime import datetime
-from typing import Tuple, Dict, Optional, List
+from typing import Tuple, Dict, Optional, List, Any
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    ExtraTreesRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
@@ -27,8 +33,11 @@ class ModelConfig:
     
     def __init__(
         self,
+        model_family: str = "lightgbm",
         task: str = "classification",  # classification or regression
-        target_column: str = "label_1d",
+        target_column: Optional[str] = None,
+        forecast_horizon: int = 1,
+        test_size: float = 0.2,
         n_splits: int = 5,
         n_estimators: int = 100,
         learning_rate: float = 0.05,
@@ -40,8 +49,11 @@ class ModelConfig:
         early_stopping_rounds: int = 20,
         verbose: int = -1
     ):
+        self.model_family = str(model_family).strip().lower().replace("-", "_")
         self.task = task
-        self.target_column = target_column
+        self.forecast_horizon = int(forecast_horizon)
+        self.test_size = float(test_size)
+        self.target_column = target_column or self._default_target_column(task, self.forecast_horizon)
         self.n_splits = n_splits
         
         # LightGBM hyperparameters
@@ -65,12 +77,23 @@ class ModelConfig:
     def to_dict(self) -> Dict:
         """Serialize configuration."""
         return {
+            'model_family': self.model_family,
             'task': self.task,
             'target_column': self.target_column,
+            'forecast_horizon': self.forecast_horizon,
+            'test_size': self.test_size,
             'n_splits': self.n_splits,
             'early_stopping_rounds': self.early_stopping_rounds,
             'params': self.params
         }
+
+    @staticmethod
+    def _default_target_column(task: str, forecast_horizon: int) -> str:
+        if task == "regression":
+            return f"ret_{forecast_horizon}"
+        if task == "multiclass":
+            return f"label_{forecast_horizon}d_bin"
+        return f"label_{forecast_horizon}d"
 
 
 class TimeSeriesDataSplit:
@@ -107,10 +130,37 @@ class ModelTrainer:
     
     def __init__(self, config: Optional[ModelConfig] = None):
         self.config = config or ModelConfig()
-        self.model = None
+        self.model: Any = None
         self.feature_names = None
         self.metrics = {}
         self.training_history = []
+
+    def _uses_lightgbm(self) -> bool:
+        return self.config.model_family == "lightgbm"
+
+    def model_artifact_suffix(self) -> str:
+        return ".txt" if self._uses_lightgbm() else ".pkl"
+
+    def _build_sklearn_estimator(self):
+        max_depth = self.config.params.get("max_depth")
+        common = {
+            "n_estimators": self.config.params.get("n_estimators", 100),
+            "max_depth": None if max_depth in (None, 0, -1) else max_depth,
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+
+        if self.config.model_family == "random_forest":
+            if self.config.task == "regression":
+                return RandomForestRegressor(**common)
+            return RandomForestClassifier(**common)
+
+        if self.config.model_family == "extra_trees":
+            if self.config.task == "regression":
+                return ExtraTreesRegressor(**common)
+            return ExtraTreesClassifier(**common)
+
+        raise ValueError(f"Unsupported model family: {self.config.model_family}")
     
     def prepare_data(
         self,
@@ -174,50 +224,62 @@ class ModelTrainer:
         Returns:
             Training metrics
         """
-        # Prepare data for LightGBM
-        train_data = lgb.Dataset(
-            X_train,
-            label=y_train,
-            feature_name=self.feature_names,
-            free_raw_data=False
-        )
-        
-        valid_sets = [train_data]
-        valid_names = ['training']
-        
-        if X_val is not None and y_val is not None:
-            val_data = lgb.Dataset(
-                X_val,
-                label=y_val,
-                feature_name=self.feature_names,
-                reference=train_data,
-                free_raw_data=False
-            )
-            valid_sets.append(val_data)
-            valid_names.append('validation')
-        
-        # Train model
-        self.model = lgb.train(
-            self.config.params,
-            train_data,
-            num_boost_round=self.config.params.get('n_estimators', 100),
-            valid_sets=valid_sets if len(valid_sets) > 1 else None,
-            valid_names=valid_names if len(valid_sets) > 1 else None
-        )
-        
-        # Get final score
         metrics = {
-            'n_estimators': self.model.num_trees(),
+            'n_estimators': self.config.params.get('n_estimators', 100),
             'feature_importance': {}
         }
-        
+
+        if self._uses_lightgbm():
+            train_data = lgb.Dataset(
+                X_train,
+                label=y_train,
+                feature_name=self.feature_names,
+                free_raw_data=False
+            )
+
+            valid_sets = [train_data]
+            valid_names = ['training']
+
+            if X_val is not None and y_val is not None:
+                val_data = lgb.Dataset(
+                    X_val,
+                    label=y_val,
+                    feature_name=self.feature_names,
+                    reference=train_data,
+                    free_raw_data=False
+                )
+                valid_sets.append(val_data)
+                valid_names.append('validation')
+
+            self.model = lgb.train(
+                self.config.params,
+                train_data,
+                num_boost_round=self.config.params.get('n_estimators', 100),
+                valid_sets=valid_sets if len(valid_sets) > 1 else None,
+                valid_names=valid_names if len(valid_sets) > 1 else None
+            )
+            metrics['n_estimators'] = self.model.num_trees()
+            try:
+                importances = self.model.feature_importance()
+                metrics['feature_importance'] = dict(zip(
+                    self.feature_names,
+                    importances.tolist() if hasattr(importances, 'tolist') else importances
+                ))
+            except Exception:
+                pass
+            return metrics
+
+        self.model = self._build_sklearn_estimator()
+        self.model.fit(X_train, y_train)
+
         try:
-            importances = self.model.feature_importance()
-            metrics['feature_importance'] = dict(zip(
-                self.feature_names,
-                importances.tolist() if hasattr(importances, 'tolist') else importances
-            ))
-        except:
+            importances = getattr(self.model, "feature_importances_", None)
+            if importances is not None:
+                metrics['feature_importance'] = dict(zip(
+                    self.feature_names,
+                    importances.tolist() if hasattr(importances, 'tolist') else importances
+                ))
+        except Exception:
             pass
         
         return metrics
@@ -288,8 +350,11 @@ class ModelTrainer:
         
         # For binary/multiclass, LightGBM returns shape (n_samples, n_classes)
         # Convert to class labels
-        if len(preds.shape) > 1:
+        if self._uses_lightgbm() and len(preds.shape) > 1:
             return np.argmax(preds, axis=1)
+
+        if self.config.task == 'classification' and self._uses_lightgbm():
+            return (np.asarray(preds) >= 0.5).astype(int)
         
         return preds
     
@@ -306,14 +371,18 @@ class ModelTrainer:
         if self.model is None:
             raise ValueError("Model not trained. Call train() first.")
         
-        raw_predictions = self.model.predict(X, raw_score=True)
-        
-        if self.config.task == 'classification':
-            # Softmax for multi-class
-            probs = np.exp(raw_predictions) / np.sum(np.exp(raw_predictions), axis=1, keepdims=True)
-            return probs
-        
-        return raw_predictions
+        if self._uses_lightgbm():
+            predictions = np.asarray(self.model.predict(X))
+            if self.config.task == 'classification':
+                if predictions.ndim == 1:
+                    clipped = np.clip(predictions, 0.0, 1.0)
+                    return np.column_stack([1.0 - clipped, clipped])
+                return predictions
+            return predictions
+
+        if hasattr(self.model, "predict_proba"):
+            return np.asarray(self.model.predict_proba(X))
+        return np.asarray(self.model.predict(X))
     
     def _evaluate(self, y_true: pd.Series, y_pred: np.ndarray) -> Dict:
         """Calculate evaluation metrics."""
@@ -358,8 +427,14 @@ class ModelTrainer:
         model_dir = Path(path).parent
         model_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save model
-        self.model.save_model(path, num_iteration=self.model.best_iteration)
+        model_path = Path(path)
+        metadata_path = model_path.with_name(f"{model_path.stem}_metadata.json")
+
+        if self._uses_lightgbm():
+            self.model.save_model(str(model_path), num_iteration=self.model.best_iteration)
+        else:
+            with open(model_path, 'wb') as f:
+                pickle.dump(self.model, f)
         
         # Save metadata
         metadata = {
@@ -367,24 +442,48 @@ class ModelTrainer:
             'feature_names': self.feature_names,
             'metrics': self.metrics,
             'training_date': datetime.now().isoformat(),
-            'model_type': 'lightgbm'
+            'model_type': self.config.model_family
         }
-        
-        metadata_path = path.replace('.txt', '_metadata.json')
+
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
     
     def load(self, path: str) -> None:
         """Load trained model."""
-        self.model = lgb.Booster(model_file=path)
-        
-        # Load metadata
-        metadata_path = path.replace('.txt', '_metadata.json')
-        if os.path.exists(metadata_path):
+        model_path = Path(path)
+        metadata_path = model_path.with_name(f"{model_path.stem}_metadata.json")
+
+        metadata = {}
+        if metadata_path.exists():
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
                 self.feature_names = metadata.get('feature_names')
                 self.metrics = metadata.get('metrics', {})
+                config_payload = metadata.get('config', {})
+                params = config_payload.get('params', {})
+                self.config = ModelConfig(
+                    model_family=config_payload.get('model_family', metadata.get('model_type', 'lightgbm')),
+                    task=config_payload.get('task', 'classification'),
+                    target_column=config_payload.get('target_column'),
+                    forecast_horizon=config_payload.get('forecast_horizon', 1),
+                    test_size=config_payload.get('test_size', 0.2),
+                    n_splits=config_payload.get('n_splits', 5),
+                    n_estimators=params.get('n_estimators', 100),
+                    learning_rate=params.get('learning_rate', 0.05),
+                    max_depth=params.get('max_depth', 7),
+                    num_leaves=params.get('num_leaves', 31),
+                    min_child_samples=params.get('min_child_samples', 20),
+                    subsample=params.get('subsample', 0.8),
+                    colsample_bytree=params.get('colsample_bytree', 0.8),
+                    early_stopping_rounds=config_payload.get('early_stopping_rounds', 20),
+                    verbose=params.get('verbose', -1),
+                )
+
+        if model_path.suffix == ".txt":
+            self.model = lgb.Booster(model_file=str(model_path))
+        else:
+            with open(model_path, 'rb') as f:
+                self.model = pickle.load(f)
     
     def get_feature_importance(self, top_n: int = 20) -> List[Tuple[str, float]]:
         """

@@ -32,8 +32,11 @@ class TrainingRuntimeService:
         if config is None:
             return ModelConfig()
         return ModelConfig(
+            model_family=config.model_family,
             task=config.task,
             target_column=config.target_column,
+            forecast_horizon=config.forecast_horizon,
+            test_size=config.test_size,
             n_splits=config.n_splits,
             n_estimators=config.n_estimators,
             learning_rate=config.learning_rate,
@@ -103,7 +106,7 @@ class TrainingRuntimeService:
         model_config = self._build_model_config(request.config)
         trainer = ModelTrainer(model_config)
         ohlcv = self._load_ohlcv(request)
-        X_train, y_train, X_test, y_test = trainer.prepare_data(ohlcv=ohlcv, test_size=0.2)
+        X_train, y_train, X_test, y_test = trainer.prepare_data(ohlcv=ohlcv, test_size=model_config.test_size)
         y_train = self._normalize_labels(y_train, model_config.task)
         y_test = self._normalize_labels(y_test, model_config.task)
 
@@ -112,7 +115,8 @@ class TrainingRuntimeService:
         eval_metrics = trainer._evaluate(y_test, y_pred)
 
         model_id = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")[-12:]
-        model_path = self.models_dir / f"{model_id}.txt"
+        model_name = request.model_name or f"{model_config.model_family}_{request.ticker.upper()}_{model_id}"
+        model_path = self.models_dir / f"{model_id}{trainer.model_artifact_suffix()}"
         trainer.metrics = eval_metrics
         trainer.save(str(model_path))
 
@@ -120,8 +124,10 @@ class TrainingRuntimeService:
         backtest = BacktestEngine(trainer).backtest(X_test, y_test, close_prices)
         run_payload = {
             "model_id": model_id,
+            "model_name": model_name,
             "ticker": request.ticker.upper(),
             "created_at": datetime.utcnow().isoformat(),
+            "model_family": model_config.model_family,
             "task": model_config.task,
             "config": model_config.to_dict(),
             "metrics": eval_metrics,
@@ -136,6 +142,8 @@ class TrainingRuntimeService:
         test_loss = self._loss_from_metrics(model_config.task, eval_metrics)
         return {
             "model_id": model_id,
+            "model_name": model_name,
+            "model_family": model_config.model_family,
             "status": "training_complete",
             "train_loss": float(test_loss * 0.9),
             "test_loss": float(test_loss),
@@ -153,8 +161,8 @@ class TrainingRuntimeService:
             models.append(
                 {
                     "model_id": payload["model_id"],
-                    "name": payload["model_id"],
-                    "type": payload["task"],
+                    "name": payload.get("model_name", payload["model_id"]),
+                    "type": payload.get("model_family", payload["task"]),
                     "trained_at": payload["created_at"],
                     "train_loss": float(loss * 0.9),
                     "test_loss": float(loss),
@@ -173,6 +181,8 @@ class TrainingRuntimeService:
         loss = self._loss_from_metrics(payload.get("task", "classification"), payload.get("metrics", {}))
         return {
             "model_id": model_id,
+            "model_name": payload.get("model_name", model_id),
+            "model_family": payload.get("model_family", "lightgbm"),
             "train_loss": float(loss * 0.9),
             "test_loss": float(loss),
             "features": int(payload.get("feature_count", 0)),
@@ -190,7 +200,7 @@ class TrainingRuntimeService:
                 continue
             backtests.append(
                 {
-                    "model_name": payload["model_id"],
+                    "model_name": payload.get("model_name", payload["model_id"]),
                     "period": payload.get("ticker", "N/A"),
                     "return_pct": float(bt.get("total_return", 0.0) * 100.0),
                     "sharpe_ratio": float(bt.get("sharpe_ratio", 0.0)),
@@ -203,7 +213,14 @@ class TrainingRuntimeService:
         metadata = self._read_model_metadata(model_id)
         if metadata is None:
             raise ValueError(f"Model {model_id} not found")
-        model_file = self.models_dir / f"{model_id}.txt"
+        run_payload = self._read_run(model_id) or {}
+        model_path = run_payload.get("model_path")
+        if model_path:
+            model_file = Path(model_path)
+        else:
+            txt_path = self.models_dir / f"{model_id}.txt"
+            pkl_path = self.models_dir / f"{model_id}.pkl"
+            model_file = txt_path if txt_path.exists() else pkl_path
         trainer = ModelTrainer()
         trainer.load(str(model_file))
         feature_names = trainer.feature_names or []
