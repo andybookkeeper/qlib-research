@@ -26,6 +26,23 @@ def _parse_prices(current_prices: Optional[str]) -> Dict[str, float]:
     return {}
 
 
+def _format_dashboard_positions(snapshot: Dict) -> list[Dict]:
+    positions = []
+    for pos in snapshot.get("positions", []):
+        positions.append(
+            {
+                "symbol": pos.get("ticker", ""),
+                "quantity": pos.get("quantity", 0),
+                "entry_price": pos.get("entry_price", 0.0),
+                "current_price": pos.get("current_price", 0.0),
+                "market_value": pos.get("market_value", 0.0),
+                "pnl": pos.get("unrealized_pnl", 0.0),
+                "pnl_pct": pos.get("unrealized_pnl_pct", 0.0),
+            }
+        )
+    return positions
+
+
 @router.get("/overview")
 async def get_portfolio_overview(
     current_prices: Optional[str] = Query(default=None, description="JSON string map of symbol->price"),
@@ -59,10 +76,18 @@ async def get_dashboard(
     return {
         "portfolio_value": snapshot["portfolio_value"],
         "cash": snapshot["current_cash"],
+        "gross_value": snapshot["position_value"],
+        "net_value": snapshot["portfolio_value"],
+        "realized_pnl": snapshot["realized_pnl"],
+        "unrealized_pnl": snapshot["unrealized_pnl"],
+        "total_pnl": snapshot["total_pnl"],
+        "total_pnl_pct": snapshot["total_return_pct"],
+        "open_positions": snapshot["open_positions"],
+        "total_trades": snapshot["total_trades"],
         "var_95": abs(snapshot["portfolio_value"]) * 0.05,
         "max_drawdown": 0.0,
         "sharpe_ratio": 0.0,
-        "positions": snapshot["positions"],
+        "positions": _format_dashboard_positions(snapshot),
         "risk_warnings": [],
     }
 
