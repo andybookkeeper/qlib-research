@@ -9,6 +9,15 @@ import uuid
 
 import pandas as pd
 import numpy as np
+from sqlalchemy.orm import Session
+
+from src.qlib_research.app.models.database import (
+    User as DBUser,
+    Portfolio as DBPortfolio,
+    Position as DBPosition,
+    Order as DBOrder,
+    Trade as DBTrade,
+)
 
 
 class OrderType(Enum):
@@ -502,3 +511,389 @@ class PortfolioTracker:
             'statistics': self.get_statistics(current_prices),
             'closed_trades': [trade.to_dict() for trade in self.closed_trades]
         }
+
+
+class DatabaseBrokerService:
+    """Database-backed broker service for orders and portfolio tracking."""
+
+    def __init__(self, db: Session, commission_rate: float = 0.001):
+        self.db = db
+        self.commission_rate = commission_rate
+
+    @staticmethod
+    def _as_float(value, default: float = 0.0) -> float:
+        if value is None:
+            return default
+        return float(value)
+
+    def _get_or_create_portfolio(self, user_id: Optional[int] = None) -> DBPortfolio:
+        user = None
+        if user_id is not None:
+            user = self.db.query(DBUser).filter(DBUser.id == user_id).first()
+        if user is None:
+            user = (
+                self.db.query(DBUser)
+                .filter(DBUser.username == "paper_trader")
+                .first()
+            )
+        if user is None:
+            user = DBUser(
+                username="paper_trader",
+                email="paper_trader@local",
+                password_hash="phase2-placeholder",
+                full_name="Paper Trader",
+                is_active=True,
+            )
+            self.db.add(user)
+            self.db.commit()
+            self.db.refresh(user)
+
+        portfolio = (
+            self.db.query(DBPortfolio)
+            .filter(DBPortfolio.user_id == user.id, DBPortfolio.name == "Main")
+            .first()
+        )
+        if portfolio is None:
+            initial_cash = 100000.0
+            portfolio = DBPortfolio(
+                user_id=user.id,
+                name="Main",
+                description="Default paper trading portfolio",
+                initial_capital=initial_cash,
+                current_cash=initial_cash,
+                total_value=initial_cash,
+                portfolio_type="PAPER",
+                benchmark_symbol="SPY",
+                is_active=True,
+            )
+            self.db.add(portfolio)
+            self.db.commit()
+            self.db.refresh(portfolio)
+        return portfolio
+
+    def _portfolio_market_value(self, portfolio_id: int) -> float:
+        positions = (
+            self.db.query(DBPosition)
+            .filter(DBPosition.portfolio_id == portfolio_id)
+            .all()
+        )
+        return sum(
+            self._as_float(position.current_price) * int(position.quantity)
+            for position in positions
+        )
+
+    def _refresh_portfolio_totals(self, portfolio: DBPortfolio) -> None:
+        market_value = self._portfolio_market_value(portfolio.id)
+        portfolio.total_value = self._as_float(portfolio.current_cash) + market_value
+        self.db.commit()
+
+    def _apply_fill_to_position(self, portfolio: DBPortfolio, order: DBOrder, fill_price: float, commission: float) -> None:
+        symbol = order.symbol.upper()
+        side = order.side.upper()
+        qty = int(order.quantity)
+        signed_qty = qty if side == "BUY" else -qty
+
+        position = (
+            self.db.query(DBPosition)
+            .filter(DBPosition.portfolio_id == portfolio.id, DBPosition.symbol == symbol)
+            .first()
+        )
+
+        realized_pnl = 0.0
+        if position is None:
+            position = DBPosition(
+                portfolio_id=portfolio.id,
+                symbol=symbol,
+                quantity=signed_qty,
+                entry_price=fill_price,
+                current_price=fill_price,
+                entry_date=datetime.utcnow(),
+            )
+            self.db.add(position)
+        else:
+            old_qty = int(position.quantity)
+            old_entry = self._as_float(position.entry_price)
+            new_qty = old_qty + signed_qty
+
+            if old_qty == 0 or (old_qty > 0 and signed_qty > 0) or (old_qty < 0 and signed_qty < 0):
+                total_abs = abs(old_qty) + abs(signed_qty)
+                if total_abs > 0:
+                    weighted = (
+                        (abs(old_qty) * old_entry) + (abs(signed_qty) * fill_price)
+                    ) / total_abs
+                    position.entry_price = weighted
+                position.quantity = new_qty
+            else:
+                closed_qty = min(abs(old_qty), abs(signed_qty))
+                if old_qty > 0 and signed_qty < 0:
+                    realized_pnl = (fill_price - old_entry) * closed_qty
+                elif old_qty < 0 and signed_qty > 0:
+                    realized_pnl = (old_entry - fill_price) * closed_qty
+
+                position.quantity = new_qty
+                if new_qty == 0:
+                    position.entry_price = fill_price
+                elif (old_qty > 0 > new_qty) or (old_qty < 0 < new_qty):
+                    position.entry_price = fill_price
+
+            position.current_price = fill_price
+            position.updated_at = datetime.utcnow()
+
+        if side == "BUY":
+            portfolio.current_cash = self._as_float(portfolio.current_cash) - (fill_price * qty) - commission
+        else:
+            portfolio.current_cash = self._as_float(portfolio.current_cash) + (fill_price * qty) - commission
+
+        trade = DBTrade(
+            order_id=order.id,
+            portfolio_id=portfolio.id,
+            symbol=symbol,
+            quantity=qty,
+            execution_price=fill_price,
+            commission=commission,
+            gross_pnl=realized_pnl if realized_pnl != 0 else None,
+            net_pnl=(realized_pnl - commission) if realized_pnl != 0 else None,
+            executed_at=datetime.utcnow(),
+        )
+        self.db.add(trade)
+        self.db.commit()
+        self._refresh_portfolio_totals(portfolio)
+
+    def create_order(
+        self,
+        ticker: str,
+        side: str,
+        quantity: float,
+        order_type: str,
+        price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        current_price: Optional[float] = None,
+        user_id: Optional[int] = None,
+    ) -> DBOrder:
+        portfolio = self._get_or_create_portfolio(user_id=user_id)
+        normalized_type = order_type.upper()
+        normalized_side = side.upper()
+        if normalized_type not in {"MARKET", "LIMIT", "STOP"}:
+            normalized_type = "MARKET"
+        if normalized_side not in {"BUY", "SELL"}:
+            normalized_side = "BUY"
+
+        order = DBOrder(
+            portfolio_id=portfolio.id,
+            symbol=ticker.upper(),
+            side=normalized_side,
+            quantity=int(quantity),
+            order_type=normalized_type,
+            order_price=price,
+            stop_price=stop_price,
+            status="PENDING",
+            created_at=datetime.utcnow(),
+        )
+        self.db.add(order)
+        self.db.commit()
+        self.db.refresh(order)
+
+        if normalized_type == "MARKET":
+            fill_at = current_price if current_price is not None else 100.0
+            self.fill_order(order.id, fill_at)
+            self.db.refresh(order)
+
+        return order
+
+    def fill_order(self, order_id: int, current_price: float, user_id: Optional[int] = None) -> DBOrder:
+        order = (
+            self.db.query(DBOrder)
+            .filter(DBOrder.id == order_id)
+            .first()
+        )
+        if order is None:
+            raise ValueError("Order not found")
+
+        if user_id is not None:
+            allowed = (
+                self.db.query(DBPortfolio)
+                .filter(DBPortfolio.id == order.portfolio_id, DBPortfolio.user_id == user_id)
+                .first()
+            )
+            if allowed is None:
+                raise ValueError("Order not found")
+
+        if order.status in {"FILLED", "CANCELLED", "REJECTED"}:
+            return order
+
+        fill = False
+        order_type = order.order_type.upper()
+        side = order.side.upper()
+        ref_price = self._as_float(order.order_price)
+        ref_stop = self._as_float(order.stop_price)
+
+        if order_type == "MARKET":
+            fill = True
+        elif order_type == "LIMIT":
+            if side == "BUY" and current_price <= ref_price:
+                fill = True
+            if side == "SELL" and current_price >= ref_price:
+                fill = True
+        elif order_type == "STOP":
+            if side == "BUY" and current_price >= ref_stop:
+                fill = True
+            if side == "SELL" and current_price <= ref_stop:
+                fill = True
+
+        if not fill:
+            return order
+
+        fill_price = current_price if order_type != "LIMIT" else ref_price
+        commission = fill_price * int(order.quantity) * self.commission_rate
+
+        order.fill_price = fill_price
+        order.filled_at = datetime.utcnow()
+        order.status = "FILLED"
+        self.db.commit()
+
+        portfolio = (
+            self.db.query(DBPortfolio)
+            .filter(DBPortfolio.id == order.portfolio_id)
+            .first()
+        )
+        if portfolio is None:
+            raise ValueError("Portfolio not found for order")
+
+        self._apply_fill_to_position(portfolio, order, fill_price, commission)
+        self.db.refresh(order)
+        return order
+
+    def get_order(self, order_id: int, user_id: Optional[int] = None) -> Optional[DBOrder]:
+        query = (
+            self.db.query(DBOrder)
+            .join(DBPortfolio, DBPortfolio.id == DBOrder.portfolio_id)
+            .filter(DBOrder.id == order_id)
+        )
+        if user_id is not None:
+            query = query.filter(DBPortfolio.user_id == user_id)
+        return query.first()
+
+    def get_orders(self, user_id: Optional[int] = None, limit: int = 100) -> List[DBOrder]:
+        query = (
+            self.db.query(DBOrder)
+            .join(DBPortfolio, DBPortfolio.id == DBOrder.portfolio_id)
+        )
+        if user_id is not None:
+            query = query.filter(DBPortfolio.user_id == user_id)
+        return query.order_by(DBOrder.created_at.desc()).limit(limit).all()
+
+    def get_positions(self, user_id: Optional[int] = None) -> List[DBPosition]:
+        portfolio = self._get_or_create_portfolio(user_id=user_id)
+        return (
+            self.db.query(DBPosition)
+            .filter(DBPosition.portfolio_id == portfolio.id, DBPosition.quantity != 0)
+            .all()
+        )
+
+    def get_position(self, symbol: str, user_id: Optional[int] = None) -> Optional[DBPosition]:
+        portfolio = self._get_or_create_portfolio(user_id=user_id)
+        return (
+            self.db.query(DBPosition)
+            .filter(
+                DBPosition.portfolio_id == portfolio.id,
+                DBPosition.symbol == symbol.upper(),
+                DBPosition.quantity != 0,
+            )
+            .first()
+        )
+
+    def get_trades(self, user_id: Optional[int] = None) -> List[DBTrade]:
+        portfolio = self._get_or_create_portfolio(user_id=user_id)
+        return (
+            self.db.query(DBTrade)
+            .filter(DBTrade.portfolio_id == portfolio.id)
+            .order_by(DBTrade.executed_at.desc())
+            .all()
+        )
+
+    def get_portfolio_snapshot(self, current_prices: Optional[Dict[str, float]] = None, user_id: Optional[int] = None) -> Dict:
+        current_prices = current_prices or {}
+        portfolio = self._get_or_create_portfolio(user_id=user_id)
+        positions = self.get_positions(user_id=user_id)
+
+        realized = 0.0
+        for trade in self.get_trades(user_id=user_id):
+            if trade.gross_pnl is not None:
+                realized += self._as_float(trade.gross_pnl)
+
+        unrealized = 0.0
+        position_payload = []
+        for pos in positions:
+            market_price = current_prices.get(pos.symbol, self._as_float(pos.current_price, self._as_float(pos.entry_price)))
+            entry = self._as_float(pos.entry_price)
+            qty = int(pos.quantity)
+            pnl = (market_price - entry) * qty
+            pnl_pct = ((market_price - entry) / entry * 100.0) if entry else 0.0
+            unrealized += pnl
+            position_payload.append(
+                {
+                    "ticker": pos.symbol,
+                    "quantity": qty,
+                    "entry_price": entry,
+                    "current_price": market_price,
+                    "cost_basis": abs(entry * qty),
+                    "market_value": market_price * qty,
+                    "unrealized_pnl": pnl,
+                    "unrealized_pnl_pct": pnl_pct,
+                    "is_long": qty > 0,
+                    "is_short": qty < 0,
+                }
+            )
+
+        total_pnl = realized + unrealized
+        portfolio_value = self._as_float(portfolio.current_cash) + sum(item["market_value"] for item in position_payload)
+        return_pct = (
+            (total_pnl / self._as_float(portfolio.initial_capital) * 100.0)
+            if self._as_float(portfolio.initial_capital) > 0
+            else 0.0
+        )
+
+        trades = self.get_trades(user_id=user_id)
+        pnl_values = [self._as_float(trade.gross_pnl) for trade in trades if trade.gross_pnl is not None]
+        winning = [value for value in pnl_values if value > 0]
+        losing = [value for value in pnl_values if value < 0]
+        total_trades = len(pnl_values)
+        avg_win = (sum(winning) / len(winning)) if winning else 0.0
+        avg_loss = (sum(losing) / len(losing)) if losing else 0.0
+        profit_factor = (abs(sum(winning)) / abs(sum(losing))) if losing else 0.0
+
+        holding_days = []
+        for trade in trades:
+            if trade.executed_at and trade.order and trade.order.created_at:
+                delta = (trade.executed_at - trade.order.created_at).days
+                holding_days.append(max(delta, 1))
+
+        return {
+            "initial_cash": self._as_float(portfolio.initial_capital),
+            "current_cash": self._as_float(portfolio.current_cash),
+            "portfolio_value": portfolio_value,
+            "position_value": sum(item["market_value"] for item in position_payload),
+            "total_pnl": total_pnl,
+            "total_return_pct": return_pct,
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "total_trades": total_trades,
+            "winning_trades": len(winning),
+            "losing_trades": len(losing),
+            "win_rate": (len(winning) / total_trades * 100.0) if total_trades else 0.0,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": profit_factor,
+            "avg_holding_days": float(np.mean(holding_days)) if holding_days else 0.0,
+            "open_positions": len(position_payload),
+            "positions": position_payload,
+        }
+
+    def reset(self, user_id: Optional[int] = None) -> None:
+        portfolio = self._get_or_create_portfolio(user_id=user_id)
+        self.db.query(DBTrade).filter(DBTrade.portfolio_id == portfolio.id).delete()
+        self.db.query(DBOrder).filter(DBOrder.portfolio_id == portfolio.id).delete()
+        self.db.query(DBPosition).filter(DBPosition.portfolio_id == portfolio.id).delete()
+        portfolio.current_cash = portfolio.initial_capital
+        portfolio.total_value = portfolio.initial_capital
+        self.db.commit()

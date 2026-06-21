@@ -35,6 +35,24 @@ interface OrderForm {
   orderType: 'MARKET' | 'LIMIT' | 'STOP'
 }
 
+type BrokerPosition = {
+  ticker: string
+  quantity: number
+  entry_price: number
+  current_price: number
+  unrealized_pnl_pct?: number
+}
+
+type BrokerOrder = {
+  order_id: string
+  ticker: string
+  side: string
+  quantity: number
+  filled_price?: number | null
+  status: string
+  created_at: string
+}
+
 const Trading: React.FC = () => {
   const [positions, setPositions] = useState<Position[]>([])
   const [orders, setOrders] = useState<Order[]>([])
@@ -59,8 +77,28 @@ const Trading: React.FC = () => {
           apiClient.broker.getOrders(),
           apiClient.market.getTickers(),
         ])
-        setPositions(pos.positions || [])
-        setOrders(ord.orders || [])
+        setPositions(
+          (pos as BrokerPosition[]).map((p) => ({
+            symbol: p.ticker,
+            quantity: p.quantity,
+            entry_price: p.entry_price,
+            current_price: p.current_price,
+            market_value: p.current_price * p.quantity,
+            pnl: ((p.current_price - p.entry_price) * p.quantity),
+            pnl_pct: p.unrealized_pnl_pct ?? 0,
+          }))
+        )
+        setOrders(
+          (ord as BrokerOrder[]).map((o) => ({
+            order_id: o.order_id,
+            symbol: o.ticker,
+            side: o.side.toUpperCase() as 'BUY' | 'SELL',
+            quantity: o.quantity,
+            price: o.filled_price ?? 0,
+            status: o.status.toUpperCase() as 'PENDING' | 'FILLED' | 'CANCELLED',
+            timestamp: o.created_at,
+          }))
+        )
         setTickers(tick)
         if (!formData.symbol && tick.length > 0) {
           setFormData(prev => ({ ...prev, symbol: tick[0] }))
@@ -89,8 +127,9 @@ const Trading: React.FC = () => {
         symbol: formData.symbol,
         side: formData.side,
         quantity: formData.quantity,
-        price: formData.price,
-        type: formData.orderType,
+        orderType: formData.orderType,
+        limitPrice: formData.orderType === 'LIMIT' ? formData.price : undefined,
+        stopPrice: formData.orderType === 'STOP' ? formData.price : undefined,
       }
       await apiClient.broker.placeOrder(order)
       
@@ -114,8 +153,28 @@ const Trading: React.FC = () => {
         apiClient.broker.getPositions(),
         apiClient.broker.getOrders(),
       ])
-      setPositions(pos.positions || [])
-      setOrders(ord.orders || [])
+      setPositions(
+        (pos as BrokerPosition[]).map((p) => ({
+          symbol: p.ticker,
+          quantity: p.quantity,
+          entry_price: p.entry_price,
+          current_price: p.current_price,
+          market_value: p.current_price * p.quantity,
+          pnl: ((p.current_price - p.entry_price) * p.quantity),
+          pnl_pct: p.unrealized_pnl_pct ?? 0,
+        }))
+      )
+      setOrders(
+        (ord as BrokerOrder[]).map((o) => ({
+          order_id: o.order_id,
+          symbol: o.ticker,
+          side: o.side.toUpperCase() as 'BUY' | 'SELL',
+          quantity: o.quantity,
+          price: o.filled_price ?? 0,
+          status: o.status.toUpperCase() as 'PENDING' | 'FILLED' | 'CANCELLED',
+          timestamp: o.created_at,
+        }))
+      )
     } catch (err) {
       toast({
         title: 'Order failed',

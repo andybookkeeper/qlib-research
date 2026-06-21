@@ -8,7 +8,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.qlib_research.app.api.routes import market, features, training, broker, risk, portfolio, research
+from src.qlib_research.app.api.routes import market, features, training, broker, risk, portfolio, research, realtime, auth
+from src.qlib_research.app.config import get_cors_origins, validate_runtime_settings
+from src.qlib_research.app.db import init_db, verify_connection
 
 logger = logging.getLogger("qlib_trading.api")
 
@@ -19,6 +21,21 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info("🚀 Starting Qlib Trading API")
+    validate_runtime_settings(logger)
+    
+    # Initialize database
+    try:
+        logger.info("[DB] Initializing database...")
+        init_db()
+        logger.info("[DB] ✓ Database tables created")
+        
+        if verify_connection():
+            logger.info("[DB] ✓ Database connection verified")
+        else:
+            logger.warning("[DB] ⚠ Database connection check failed")
+    except Exception as e:
+        logger.error(f"[DB] ✗ Database initialization failed: {e}")
+        raise
     
     yield
     
@@ -37,7 +54,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -87,6 +104,8 @@ app.include_router(broker.router, prefix="/api/broker", tags=["broker"])
 app.include_router(risk.router, prefix="/api/risk", tags=["risk"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
+app.include_router(realtime.router, prefix="/api/realtime", tags=["realtime"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 
 
 # Error handlers

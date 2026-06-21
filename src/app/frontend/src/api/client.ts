@@ -1,123 +1,114 @@
 const API_BASE_URL = 'http://localhost:8000/api'
+const AUTH_TOKEN_KEY = 'qlib_auth_token'
+
+function getAuthToken(): string | null {
+  return localStorage.getItem(AUTH_TOKEN_KEY)
+}
+
+async function request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = getAuthToken()
+  const headers = new Headers(init.headers || {})
+
+  if (!headers.has('Content-Type') && init.body && !(init.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const detail = payload?.detail || `Request failed (${response.status})`
+    throw new Error(detail)
+  }
+  return response.json()
+}
+
+export function createRealtimeWebSocket(): WebSocket {
+  const token = getAuthToken()
+  const query = token ? `?token=${encodeURIComponent(token)}` : ''
+  return new WebSocket(`ws://localhost:8000/api/realtime/ws${query}`)
+}
 
 export const apiClient = {
-  // Market Data
+  auth: {
+    signup: async (payload: {
+      username: string
+      email: string
+      password: string
+      full_name?: string
+    }) => request('/auth/signup', { method: 'POST', body: JSON.stringify(payload) }),
+    login: async (username: string, password: string) =>
+      request<{ access_token: string; token_type: string }>('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }),
+    me: async () => request('/auth/me'),
+  },
   market: {
-    getTickers: async (): Promise<string[]> => {
-      const response = await fetch(`${API_BASE_URL}/market/tickers`)
-      return response.json()
-    },
-    getPrice: async (ticker: string) => {
-      const response = await fetch(`${API_BASE_URL}/market/price/${ticker}`)
-      return response.json()
-    },
+    getTickers: async (): Promise<string[]> => request('/market/tickers'),
+    getPrice: async (ticker: string) => request(`/market/price/${ticker}`),
     getPrices: async (tickers: string[]) => {
       const params = new URLSearchParams()
-      tickers.forEach(t => params.append('tickers', t))
-      const response = await fetch(`${API_BASE_URL}/market/prices?${params}`)
-      return response.json()
+      tickers.forEach((t) => params.append('tickers', t))
+      return request(`/market/prices?${params.toString()}`)
     },
   },
-
-  // Portfolio
   portfolio: {
-    getOverview: async () => {
-      const response = await fetch(`${API_BASE_URL}/portfolio/overview`)
-      return response.json()
-    },
-    getDashboard: async () => {
-      const response = await fetch(`${API_BASE_URL}/portfolio/dashboard`)
-      return response.json()
-    },
-    getPerformance: async () => {
-      const response = await fetch(`${API_BASE_URL}/portfolio/performance`)
-      return response.json()
-    },
+    getOverview: async () => request('/portfolio/overview'),
+    getDashboard: async () => request('/portfolio/dashboard'),
+    getPerformance: async () => request('/portfolio/performance'),
   },
-
-  // Risk
   risk: {
-    getLimits: async () => {
-      const response = await fetch(`${API_BASE_URL}/risk/limits`)
-      return response.json()
-    },
-    calculateVaR: async (portfolioValue: number, confidence: number = 0.95) => {
-      const response = await fetch(
-        `${API_BASE_URL}/risk/var?portfolio_value=${portfolioValue}&confidence=${confidence}`,
-        { method: 'POST' }
-      )
-      return response.json()
-    },
+    getLimits: async () => request('/risk/limits'),
+    calculateVaR: async (portfolioValue: number, confidence = 0.95) =>
+      request(`/risk/var?portfolio_value=${portfolioValue}&confidence=${confidence}`, {
+        method: 'POST',
+      }),
   },
-
-  // Broker
   broker: {
-    getPositions: async () => {
-      const response = await fetch(`${API_BASE_URL}/broker/positions`)
-      return response.json()
-    },
-    getOrders: async () => {
-      const response = await fetch(`${API_BASE_URL}/broker/orders`)
-      return response.json()
-    },
-    getTrades: async () => {
-      const response = await fetch(`${API_BASE_URL}/broker/trades`)
-      return response.json()
-    },
-    placeOrder: async (order: any) => {
-      const response = await fetch(`${API_BASE_URL}/broker/order`, {
+    getPositions: async () => request('/broker/positions'),
+    getOrders: async () => request('/broker/orders'),
+    getTrades: async () => request('/broker/trades/closed'),
+    placeOrder: async (order: {
+      symbol: string
+      side: 'BUY' | 'SELL'
+      quantity: number
+      orderType: 'MARKET' | 'LIMIT' | 'STOP'
+      limitPrice?: number
+      stopPrice?: number
+    }) =>
+      request('/broker/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(order),
-      })
-      return response.json()
-    },
+        body: JSON.stringify({
+          ticker: order.symbol,
+          side: order.side,
+          quantity: order.quantity,
+          order_type: order.orderType,
+          limit_price: order.orderType === 'LIMIT' ? order.limitPrice : undefined,
+          stop_price: order.orderType === 'STOP' ? order.stopPrice : undefined,
+        }),
+      }),
   },
-
-  // Research
   research: {
-    listModels: async () => {
-      const response = await fetch(`${API_BASE_URL}/research/models`)
-      return response.json()
-    },
-    predict: async (modelName: string, features: any) => {
-      const response = await fetch(
-        `${API_BASE_URL}/research/predict?model_name=${modelName}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(features),
-        }
-      )
-      return response.json()
-    },
-    getBacktests: async () => {
-      const response = await fetch(`${API_BASE_URL}/research/backtests`)
-      return response.json()
-    },
-  },
-
-  // Features
-  features: {
-    getIndicators: async () => {
-      const response = await fetch(`${API_BASE_URL}/features/indicators`)
-      return response.json()
-    },
-  },
-
-  // Training
-  training: {
-    trainModel: async (config: any) => {
-      const response = await fetch(`${API_BASE_URL}/training/train`, {
+    listModels: async () => request('/research/models'),
+    predict: async (modelName: string, features: unknown) =>
+      request(`/research/predict?model_name=${encodeURIComponent(modelName)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(features),
+      }),
+    getBacktests: async () => request('/research/backtests'),
+  },
+  features: {
+    getIndicators: async () => request('/features/indicators'),
+  },
+  training: {
+    trainModel: async (config: unknown) =>
+      request('/training/train', {
+        method: 'POST',
         body: JSON.stringify(config),
-      })
-      return response.json()
-    },
-    listModels: async () => {
-      const response = await fetch(`${API_BASE_URL}/training/models`)
-      return response.json()
-    },
+      }),
+    listModels: async () => request('/training/models'),
   },
 }

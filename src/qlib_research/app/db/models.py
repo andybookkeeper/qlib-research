@@ -57,6 +57,13 @@ class Order(Base):
     # Metadata
     signal_id = Column(String(100), nullable=True)  # Link to Qlib signal
     notes = Column(String(500), nullable=True)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.status is None:
+            self.status = OrderStatus.PENDING
+        if self.filled_quantity is None:
+            self.filled_quantity = 0
     
     def __repr__(self):
         return (
@@ -94,6 +101,14 @@ class Position(Base):
     # Timestamps
     opened_at = Column(DateTime, default=datetime.now)
     closed_at = Column(DateTime, nullable=True)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.unrealized_pnl is None:
+            quantity = self.quantity or 0
+            avg_cost = self.avg_cost or 0.0
+            current_price = self.current_price or 0.0
+            self.unrealized_pnl = (current_price - avg_cost) * quantity
     
     def __repr__(self):
         return (

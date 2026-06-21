@@ -6,3 +6,5 @@ __pycache__/
 
 data/qlib/**
 !data/qlib/.gitignore
+data/qlib_trading.db
+mlruns/

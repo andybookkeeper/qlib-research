@@ -1,9 +1,11 @@
 // src/app/frontend/src/components/Navigation.tsx
 import { HStack, Button, Box, Heading } from '@chakra-ui/react'
 import { Link as RouterLink, useLocation } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 
 export default function Navigation() {
   const location = useLocation()
+  const { user, logout } = useAuth()
 
   const isActive = (path: string) => location.pathname === path
 
@@ -50,6 +52,9 @@ export default function Navigation() {
               Research
             </Button>
           </RouterLink>
+          <Button variant="ghost" _hover={{ bg: 'blue.700' }} onClick={logout}>
+            Logout {user?.username ? `(${user.username})` : ''}
+          </Button>
         </HStack>
       </HStack>
     </Box>

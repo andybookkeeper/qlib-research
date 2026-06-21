@@ -1,0 +1,18 @@
+{
+  "ticker": "AAPL",
+  "start_date": "2022-01-01",
+  "end_date": "2025-01-01",
+  "task": {
+    "model_config": {
+      "task": "classification",
+      "target_column": "label_1d",
+      "n_splits": 5,
+      "n_estimators": 100,
+      "learning_rate": 0.05,
+      "max_depth": 7,
+      "num_leaves": 31,
+      "early_stopping_rounds": 20
+    }
+  }
+}
+

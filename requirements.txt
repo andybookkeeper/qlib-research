@@ -5,3 +5,23 @@ jupyterlab
 pyyaml
 matplotlib
 lightgbm
+
+# Phase 2: Database & ORM
+sqlalchemy==2.0.20
+alembic==1.12.0
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+
+# Database utilities
+sqlalchemy-utils==0.41.1
+
+# Connection pooling
+sqlalchemy-pool-pre-ping==1.0.0
+
+# Phase 2-03: Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.9
+
+# Integration testing
+httpx2==2.4.0
