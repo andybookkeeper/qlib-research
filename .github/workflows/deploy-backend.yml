@@ -1,0 +1,39 @@
+name: Deploy Backend to Render
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'src/qlib_research/**'
+      - 'requirements.txt'
+      - 'render.yaml'
+      - '.github/workflows/deploy-backend.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trigger Render Deployment
+        run: |
+          curl --request POST \
+            --url https://api.render.com/deploy/srv-${{ secrets.RENDER_SERVICE_ID }}?key=${{ secrets.RENDER_API_KEY }} \
+            --header 'Content-Type: application/json'
+
+      - name: Wait for Deployment
+        run: sleep 30
+
+      - name: Verify Health Check
+        run: |
+          for i in {1..30}; do
+            if curl -f https://${{ secrets.RENDER_SERVICE_URL }}/health; then
+              echo "Backend is healthy!"
+              exit 0
+            fi
+            echo "Waiting for backend to be ready... ($i/30)"
+            sleep 10
+          done
+          echo "Backend health check failed"
+          exit 1
