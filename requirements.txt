@@ -9,13 +9,13 @@ fastapi
 uvicorn[standard]
 
 # Phase 2: Database & ORM
-sqlalchemy==2.0.20
-alembic==1.12.0
+sqlalchemy==2.0.51
+alembic==1.16.2
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
 
 # Database utilities
-sqlalchemy-utils==0.41.1
+sqlalchemy-utils==0.42.1
 
 # Phase 2-03: Authentication
 python-jose[cryptography]==3.3.0
