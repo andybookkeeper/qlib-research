@@ -1,0 +1,15 @@
+app_name: Qlib Research Trader
+step: research-goals
+
+research_goals:
+  - Build a Qlib-backed research workflow for stocks first, then extend to options.
+  - Support manual trade preparation and paper trading before any live order routing.
+  - Keep quantitative research, signal generation, and UI execution flows separated.
+  - Preserve a clean path from data ingestion to feature generation, training, backtesting, and signal serving.
+  - Make the built-in GUI usable for interactive validation of the workflow.
+
+success_criteria:
+  - Qlib can initialize from a repo-local or external provider path.
+  - The app has an explicit paper-trading-first boundary.
+  - The UI workflow can support manual analysis and order preview.
+  - The roadmap remains sequenced so research precedes execution and UI wiring.

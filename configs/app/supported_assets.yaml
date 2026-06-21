@@ -1,0 +1,87 @@
+# Supported Assets and Trading Modes
+# This document defines the universe of assets and modes supported by the quant trading app
+
+asset_universe:
+  stocks:
+    description: "US stocks traded on major exchanges (NYSE, NASDAQ)"
+    enabled: true
+    data_source: "Qlib (Yahoo Finance via qlib-data)"
+    min_price: 1.0
+    max_price: 10000.0
+    sector_filter: null  # null = all sectors; can restrict to ['tech', 'finance', etc.]
+    liquidity_min_daily_volume: 100000  # shares
+    
+  options:
+    description: "US equity options on underlying stocks"
+    enabled: true
+    data_source: "External API (OptionChain or custom provider; not in native Qlib)"
+    expiration_min_dte: 1  # days to expiration
+    expiration_max_dte: 365
+    strike_filter: "ATM ± 10%"  # strike range relative to spot price
+    Greeks: ["delta", "gamma", "theta", "vega", "rho"]
+    
+trading_modes:
+  paper_trading:
+    description: "Simulated trading with virtual cash; no real orders placed"
+    enabled: true
+    initial_cash: 100000.0  # USD
+    commission: 0.001  # 0.1% per trade
+    slippage: 0.001  # 0.1% slippage on fills
+    position_limit_pct: 0.05  # max 5% of portfolio per position
+    
+  manual_order_entry:
+    description: "User-initiated orders via GUI; paper or live broker depending on broker_mode"
+    enabled: true
+    order_types: ["market", "limit", "stop_loss"]
+    time_in_force: ["day", "gtc"]  # day, good-til-canceled
+    position_max_qty: null  # null = unlimited; can set limits per position
+    
+  automated_signal_execution:
+    description: "Orders generated from Qlib signal model; paper trading only in MVP"
+    enabled: false  # Disabled until signal pipeline is live
+    signal_sources: ["qlib_supervised_model", "qlib_rl_model", "ensemble_signal"]
+    risk_check_before_submit: true
+    
+broker_integration:
+  paper_broker:
+    description: "Built-in mock broker for paper trading simulation"
+    enabled: true
+    order_queue_latency_ms: 50
+    fill_strategy: "deterministic"  # always fills at market price; no slippage modeling yet
+    
+  live_broker:
+    description: "Real broker API (e.g., Alpaca, Interactive Brokers, TD Ameritrade)"
+    enabled: false  # Disabled in MVP; enable only after risk review
+    supported_brokers: ["alpaca", "interactive_brokers", "td_ameritrade"]
+    order_sync_interval_sec: 1
+    
+deployment_mode:
+  mode: "single_user_paper_trading"
+  description: "MVP: Single user, paper trading only, local deployment"
+  live_trading_enabled: false
+  multi_user_auth: false
+  
+  # When live trading is enabled, these safeguards activate:
+  live_trading_safeguards:
+    - max_order_qty_pct_portfolio: 0.05
+    - max_daily_loss_pct: 0.02
+    - max_sector_exposure_pct: 0.10
+    - max_single_position_pct: 0.10
+    - kill_switch_on_error: true
+
+market_hours:
+  us_market_open: "09:30"  # US/Eastern
+  us_market_close: "16:00"
+  trading_days: "Mon-Fri, excluding US holidays"
+  
+data_refresh:
+  stock_price_frequency: "daily"  # End-of-day from Qlib data provider
+  options_chain_frequency: "daily"
+  intraday_quotes: false  # Not in MVP; would require real-time data subscription
+  
+acceptance_criteria:
+  - "Stocks asset class is queryable from Qlib market data"
+  - "Paper trading mode can be toggled from GUI (default: on)"
+  - "Manual order entry supports market and limit orders for stocks"
+  - "Options UI displays options chain but order entry disabled until data source is live"
+  - "All supported assets and modes are documented in README.md and accessible via settings API"

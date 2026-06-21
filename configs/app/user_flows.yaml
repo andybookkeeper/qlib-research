@@ -1,0 +1,206 @@
+# User Flows: Primary user interactions and workflows
+# These flows guide UI/UX design and backend API requirements
+
+primary_flows:
+
+  # Flow 1: Dashboard & Market Overview
+  flow_market_overview:
+    name: "View Market Overview"
+    actor: "Trader"
+    goal: "Monitor portfolio and market data"
+    steps:
+      - "Open dashboard"
+      - "See portfolio summary (cash, positions, P&L)"
+      - "See watchlist (custom stock list)"
+      - "See top gainers/losers (optional market heat map)"
+    screens_involved: ["dashboard", "watchlist_widget", "market_heatmap_widget"]
+    qlib_integration:
+      - "Fetch current prices from Qlib market data"
+      - "Compute portfolio P&L (live positions vs. historical cost)"
+    acceptance_criteria:
+      - "Dashboard loads within 2 seconds"
+      - "Portfolio summary is accurate (real positions from paper broker)"
+      - "Watchlist shows current price and daily change"
+
+  # Flow 2: Research & Analysis
+  flow_stock_analysis:
+    name: "Research and Analyze Stock"
+    actor: "Quantitative Analyst / Trader"
+    goal: "Understand a stock and decide whether to trade"
+    steps:
+      - "Search for stock by ticker or name"
+      - "View stock detail page (price history, key metrics)"
+      - "View technical analysis (moving averages, support/resistance)"
+      - "View Qlib model signals (if available)"
+      - "View analyst notes (optional markdown notes user added)"
+    screens_involved: ["stock_search", "stock_detail", "technical_chart", "signals_panel", "notes_panel"]
+    qlib_integration:
+      - "Fetch historical OHLC from Qlib"
+      - "Fetch pre-trained model features and signal predictions"
+      - "Compute technical indicators (e.g., 20d MA, RSI)"
+    acceptance_criteria:
+      - "Stock search returns results in <1 second"
+      - "Historical chart loads with 2 years of data"
+      - "Qlib signals are displayed with model name and prediction timestamp"
+
+  # Flow 3: Options Analysis
+  flow_options_analysis:
+    name: "View Options Chain and Greeks"
+    actor: "Options Trader"
+    goal: "Analyze options for spread strategies"
+    steps:
+      - "Navigate to underlying stock"
+      - "View options chain (calls and puts by expiration and strike)"
+      - "See Greeks (delta, gamma, theta, vega, rho)"
+      - "Hover over row to see details (implied vol, open interest)"
+      - "Filter chain by expiration date"
+    screens_involved: ["stock_detail", "options_chain_table", "greeks_legend", "options_filter_bar"]
+    qlib_integration:
+      - "Fetch options data from external provider (not Qlib native)"
+      - "Compute Greeks using Black-Scholes or local volatility model"
+    acceptance_criteria:
+      - "Options chain loads within 3 seconds"
+      - "All Greeks displayed with 2 decimal precision"
+      - "Filters (expiration, strike range) respond immediately"
+
+  # Flow 4: Manual Order Entry
+  flow_manual_order_entry:
+    name: "Place Manual Order"
+    actor: "Trader"
+    goal: "Execute a discretionary trade"
+    steps:
+      - "Click 'Buy' or 'Sell' button on stock or options chain"
+      - "Order entry form appears (quantity, price, time in force)"
+      - "For limit orders: enter desired price"
+      - "Review order preview (fee, total cost/proceeds)"
+      - "Click 'Place Order' button"
+      - "See confirmation dialog with order ID"
+      - "Order appears in open orders list"
+    screens_involved: ["stock_detail", "options_chain", "order_entry_modal", "order_preview_modal", "order_confirmation_modal", "open_orders_list"]
+    risk_checks:
+      - "Check buying power (cash sufficient for order)"
+      - "Check position limits (not exceeding max exposure)"
+      - "Check daily loss limit (if configured)"
+    acceptance_criteria:
+      - "Order entry form is modal and non-blocking"
+      - "Preview shows correct fees and total"
+      - "Order placed successfully creates position in paper broker"
+      - "Confirmation displays order ID and fills details"
+
+  # Flow 5: Trade Monitoring & Management
+  flow_trade_monitoring:
+    name: "Monitor Open Orders and Positions"
+    actor: "Trader"
+    goal: "Track orders in flight and current portfolio positions"
+    steps:
+      - "View 'Open Orders' tab"
+      - "See list of unfilled orders (qty, price, status, time open)"
+      - "Cancel an order if desired"
+      - "View 'Positions' tab"
+      - "See list of current holdings (qty, avg cost, current price, P&L, P&L %)"
+      - "Click on position to drill down into fills and transactions"
+    screens_involved: ["open_orders_tab", "open_orders_list", "positions_tab", "positions_list", "position_detail_modal"]
+    paper_trading_specific:
+      - "All orders filled instantly at market price (no actual latency in MVP)"
+      - "Positions are tracked in in-memory paper broker state"
+    acceptance_criteria:
+      - "Open orders list updates in real-time (or on manual refresh)"
+      - "Cancel order removes from open list immediately"
+      - "Positions list shows correct current price and P&L"
+      - "Position detail shows all fills and transactions"
+
+  # Flow 6: Portfolio P&L and History
+  flow_portfolio_history:
+    name: "Review Portfolio Performance History"
+    actor: "Trader / Analyst"
+    goal: "Understand historical P&L and trading patterns"
+    steps:
+      - "View 'Portfolio History' tab"
+      - "See portfolio value over time (line chart)"
+      - "See realized and unrealized P&L breakdown"
+      - "See trades history (entry date, exit date, qty, fees, realized P&L)"
+      - "Download trades history as CSV for external analysis"
+    screens_involved: ["portfolio_history_tab", "portfolio_value_chart", "pnl_breakdown_panel", "trades_history_table"]
+    integration_requirements:
+      - "Paper broker must persist all trades and portfolio snapshots"
+      - "Backend API must compute daily portfolio value"
+    acceptance_criteria:
+      - "Portfolio chart shows 1+ weeks of history in paper trading mode"
+      - "Realized P&L matches sum of closed trade P&L"
+      - "Unrealized P&L = sum of (current price - avg cost) * qty for open positions"
+      - "CSV export is parseable in Excel"
+
+  # Flow 7: Backtesting Results Review
+  flow_backtest_results:
+    name: "Review Qlib Model Backtest Results"
+    actor: "Quantitative Analyst"
+    goal: "Validate model performance before deploying signals"
+    steps:
+      - "Navigate to 'Research' section"
+      - "View list of trained models and backtest runs"
+      - "Click on a backtest result"
+      - "See metrics (Sharpe, max drawdown, returns, win rate)"
+      - "See equity curve and drawdown chart"
+      - "Compare multiple backtest runs side-by-side"
+    screens_involved: ["research_dashboard", "model_list", "backtest_results_detail", "metrics_comparison", "equity_curves"]
+    qlib_integration:
+      - "Pull backtest records from Qlib experiment folder / MLflow"
+      - "Parse metrics from Qlib recorder or experiment artifacts"
+      - "Render equity curve from returns series"
+    acceptance_criteria:
+      - "Model list loads within 2 seconds"
+      - "Backtest detail displays all metrics correctly"
+      - "Charts render without lag for 1+ year of daily data"
+
+  # Flow 8: Settings and Configuration
+  flow_settings:
+    name: "Configure App Settings"
+    actor: "Trader / Admin"
+    goal: "Customize paper trading parameters and UI preferences"
+    steps:
+      - "Navigate to Settings page"
+      - "Set initial portfolio cash"
+      - "Set commission and slippage rates"
+      - "Set risk limits (max loss, position size limits)"
+      - "Set data refresh frequency"
+      - "Choose theme (light/dark mode, optional)"
+      - "Save settings"
+    screens_involved: ["settings_page", "portfolio_settings", "risk_settings", "data_settings", "ui_preferences"]
+    acceptance_criteria:
+      - "Settings persist across app restart"
+      - "Paper broker uses updated settings for new orders"
+      - "UI immediately reflects theme changes"
+
+secondary_flows:
+
+  # Error Handling
+  flow_insufficient_buying_power:
+    name: "Order Rejected Due to Insufficient Buying Power"
+    actor: "Trader"
+    trigger: "User submits order but portfolio has insufficient cash"
+    resolution:
+      - "Show error dialog with available cash and required cash"
+      - "Suggest reducing quantity or using limit price"
+      - "Allow user to adjust order"
+    screens_involved: ["order_entry_modal", "error_dialog"]
+
+  flow_order_cancel_rejected:
+    name: "Order Cannot Be Cancelled (Already Filled)"
+    actor: "Trader"
+    trigger: "User tries to cancel an order that has already been filled"
+    resolution:
+      - "Show message: 'Order already filled; cannot cancel'"
+      - "Show fill details"
+      - "Offer to place inverse order to exit position"
+
+edge_cases:
+  - "Market is closed: UI shows 'Market Closed' banner; order entry disabled"
+  - "Stock delisted: Show warning; prevent new orders"
+  - "Options chain empty: Show 'No options available' in options panel"
+  - "Connection lost to data provider: Show warning; last known prices displayed with timestamp"
+
+acceptance_criteria_all_flows:
+  - "Each flow has clear success path and error handling"
+  - "All flows tested with E2E tests (Selenium or Playwright)"
+  - "All flows have <3 second latency on typical development machine"
+  - "All flows work in paper trading mode without real broker"
