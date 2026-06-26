@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,8 @@ import pandas as pd
 from src.qlib_research.app.api.schemas.ml import ModelConfigSchema, TrainingRequest
 from src.qlib_research.app.services.ml_service import BacktestEngine, ModelConfig, ModelTrainer
 from src.qlib_research.app.services.qlib_service import QlibService
+
+logger = logging.getLogger("qlib_trading.training_runtime")
 
 
 class TrainingRuntimeService:
@@ -240,6 +243,90 @@ class TrainingRuntimeService:
         except Exception:
             confidence = 1.0
         return {"model_name": model_id, "prediction": prediction_value, "confidence": confidence}
+
+    def generate_signals(self, tickers: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Run all trained models on latest data and return BUY/SELL/HOLD signals."""
+        from datetime import date, timedelta
+        from src.qlib_research.app.services.feature_pipeline import get_feature_matrix
+
+        signals: List[Dict[str, Any]] = []
+        end_date = date.today().isoformat()
+        start_date = (date.today() - timedelta(days=150)).isoformat()
+
+        for run_file in sorted(self.runs_dir.glob("*.json"), reverse=True):
+            payload = json.loads(run_file.read_text(encoding="utf-8"))
+            model_id = payload["model_id"]
+            ticker = payload.get("ticker", "AAPL")
+            task = payload.get("task", "classification")
+
+            # Filter by requested tickers
+            if tickers and ticker not in [t.upper() for t in tickers]:
+                continue
+
+            # Load model
+            model_path = payload.get("model_path")
+            if model_path:
+                model_file = Path(model_path)
+            else:
+                txt_path = self.models_dir / f"{model_id}.txt"
+                pkl_path = self.models_dir / f"{model_id}.pkl"
+                model_file = txt_path if txt_path.exists() else pkl_path
+            if not model_file.exists():
+                continue
+
+            try:
+                trainer = ModelTrainer()
+                trainer.load(str(model_file))
+                feature_names = trainer.feature_names or []
+                if not feature_names:
+                    continue
+
+                # Fetch recent OHLCV
+                ohlcv = self.qlib.get_ohlcv(ticker, start_date, end_date)
+                if ohlcv is None or ohlcv.empty or len(ohlcv) < 60:
+                    ohlcv = self._generate_fallback_ohlcv(150)
+
+                ohlcv = ohlcv.rename(columns=str.lower)
+                features, _ = get_feature_matrix(ohlcv, drop_na=True)
+                features = features.reindex(columns=feature_names, fill_value=0.0)
+
+                # Use last available row
+                last_row = features.iloc[[-1]]
+                raw = trainer.predict(last_row)
+                raw_val = float(raw[0]) if hasattr(raw, "__len__") else float(raw)
+
+                confidence = 0.5
+                try:
+                    probs = trainer.predict_proba(last_row)
+                    confidence = float(np.max(probs[0])) if len(probs.shape) > 1 else float(np.clip(probs[0], 0.0, 1.0))
+                except Exception:
+                    pass
+
+                # Map prediction → signal
+                if task == "regression":
+                    if raw_val > 0.005:
+                        signal = "BUY"
+                    elif raw_val < -0.005:
+                        signal = "SELL"
+                    else:
+                        signal = "HOLD"
+                else:
+                    signal = "BUY" if raw_val >= 1 else "SELL"
+
+                signals.append({
+                    "ticker": ticker,
+                    "model_name": payload.get("model_name", model_id),
+                    "model_id": model_id,
+                    "signal": signal,
+                    "confidence": round(confidence, 4),
+                    "raw_prediction": raw_val,
+                    "task": task,
+                    "generated_at": datetime.utcnow().isoformat(),
+                })
+            except Exception as exc:
+                logger.warning("Signal generation failed for model %s: %s", model_id, exc)
+
+        return signals
 
     def run_config_workflow(self, workflow_config: Dict[str, Any]) -> Dict[str, Any]:
         task = workflow_config.get("task", {})

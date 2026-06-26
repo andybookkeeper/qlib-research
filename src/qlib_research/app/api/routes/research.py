@@ -1,6 +1,6 @@
 """Research and ML model endpoints."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -37,3 +37,14 @@ async def list_backtests(
 ) -> Dict[str, Any]:
     """Get backtest results."""
     return runtime.list_backtests()
+
+
+@router.get("/signals")
+async def get_signals(
+    tickers: Optional[str] = Query(None, description="Comma-separated tickers to filter, e.g. AAPL,MSFT"),
+    runtime: TrainingRuntimeService = Depends(get_training_runtime_service),
+) -> Dict[str, Any]:
+    """Run all trained models on latest market data and return BUY/SELL/HOLD signals."""
+    ticker_list: Optional[List[str]] = [t.strip().upper() for t in tickers.split(",")] if tickers else None
+    signals = runtime.generate_signals(tickers=ticker_list)
+    return {"count": len(signals), "signals": signals}

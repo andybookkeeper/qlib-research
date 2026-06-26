@@ -114,6 +114,10 @@ export const apiClient = {
         body: JSON.stringify(features),
       }),
     getBacktests: async () => request('/research/backtests'),
+    getSignals: async (tickers?: string[]) => {
+      const qs = tickers ? `?tickers=${tickers.join(',')}` : ''
+      return request(`/research/signals${qs}`)
+    },
   },
   features: {
     getIndicators: async () => request('/features/indicators'),

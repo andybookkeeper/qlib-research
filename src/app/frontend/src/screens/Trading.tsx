@@ -22,6 +22,8 @@ import {
   Badge,
   Spinner,
   Flex,
+  Text,
+  Tooltip,
   useToast,
 } from '@chakra-ui/react'
 import { Order, Position } from '../types'
@@ -33,6 +35,14 @@ interface OrderForm {
   quantity: number
   price: number
   orderType: 'MARKET' | 'LIMIT' | 'STOP'
+}
+
+interface Signal {
+  ticker: string
+  model_name: string
+  signal: 'BUY' | 'SELL' | 'HOLD'
+  confidence: number
+  generated_at: string
 }
 
 type BrokerPosition = {
@@ -57,6 +67,8 @@ const Trading: React.FC = () => {
   const [positions, setPositions] = useState<Position[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [tickers, setTickers] = useState<string[]>([])
+  const [signals, setSignals] = useState<Signal[]>([])
+  const [loadingSignals, setLoadingSignals] = useState(false)
   const [loading, setLoading] = useState(true)
   const [placing, setPlacing] = useState(false)
   const [formData, setFormData] = useState<OrderForm>({
@@ -67,6 +79,18 @@ const Trading: React.FC = () => {
     orderType: 'MARKET',
   })
   const toast = useToast()
+
+  const fetchSignals = async () => {
+    try {
+      setLoadingSignals(true)
+      const result = await apiClient.research.getSignals()
+      setSignals(result.signals || [])
+    } catch {
+      // ponytail: silent — signals are optional, don't block trading
+    } finally {
+      setLoadingSignals(false)
+    }
+  }
 
   useEffect(() => {
     const fetchData = async () => {
@@ -111,6 +135,7 @@ const Trading: React.FC = () => {
     }
 
     fetchData()
+    fetchSignals()
     const interval = setInterval(fetchData, 5000)
     return () => clearInterval(interval)
   }, [])
@@ -334,6 +359,86 @@ const Trading: React.FC = () => {
           </CardBody>
         </Card>
       </Grid>
+
+      {/* Quant Signals Panel */}
+      <Card mb={8}>
+        <CardHeader>
+          <Flex justify="space-between" align="center">
+            <Heading size="md">Quant Signals</Heading>
+            <Tooltip label="Refresh signals">
+              <Button size="sm" isLoading={loadingSignals} onClick={fetchSignals} variant="ghost">
+                Refresh
+              </Button>
+            </Tooltip>
+          </Flex>
+        </CardHeader>
+        <CardBody>
+          {signals.length > 0 ? (
+            <Table variant="simple" size="sm">
+              <Thead>
+                <Tr>
+                  <Th>Ticker</Th>
+                  <Th>Model</Th>
+                  <Th>Signal</Th>
+                  <Th isNumeric>Confidence</Th>
+                  <Th>Generated</Th>
+                  <Th>Action</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {signals.map((sig, idx) => (
+                  <Tr key={idx}>
+                    <Td fontWeight="bold">{sig.ticker}</Td>
+                    <Td fontSize="sm" color="gray.600">{sig.model_name}</Td>
+                    <Td>
+                      <Badge
+                        colorScheme={
+                          sig.signal === 'BUY' ? 'green' : sig.signal === 'SELL' ? 'red' : 'gray'
+                        }
+                        fontSize="sm"
+                        px={3}
+                        py={1}
+                      >
+                        {sig.signal}
+                      </Badge>
+                    </Td>
+                    <Td isNumeric>
+                      <Text color={sig.confidence >= 0.7 ? 'green.600' : 'orange.500'}>
+                        {(sig.confidence * 100).toFixed(1)}%
+                      </Text>
+                    </Td>
+                    <Td fontSize="xs" color="gray.500">
+                      {new Date(sig.generated_at).toLocaleTimeString()}
+                    </Td>
+                    <Td>
+                      {sig.signal !== 'HOLD' && (
+                        <Button
+                          size="xs"
+                          colorScheme={sig.signal === 'BUY' ? 'green' : 'red'}
+                          onClick={() =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              symbol: sig.ticker,
+                              side: sig.signal as 'BUY' | 'SELL',
+                              orderType: 'MARKET',
+                            }))
+                          }
+                        >
+                          {sig.signal}
+                        </Button>
+                      )}
+                    </Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          ) : (
+            <Text color="gray.500" fontSize="sm">
+              {loadingSignals ? 'Loading signals...' : 'No signals yet — train a model in Research to generate signals.'}
+            </Text>
+          )}
+        </CardBody>
+      </Card>
 
       {/* Positions Table */}
       <Card mb={8}>
